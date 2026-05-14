@@ -1182,7 +1182,17 @@ export function Chat({
       }));
 
       // Check if it's an endpoint model
-      const customModel = endpointModels.find((m) => m.name === modelName);
+      let customModel = endpointModels.find((m) => m.name === modelName);
+      
+      // Fallback: If not found in list but we have custom endpoints, check if the model name suggests a non-Gemini endpoint
+      if (!customModel && endpoints.length > 0 && (modelName.includes('/') || modelName.includes('llama') || modelName.includes('qwen') || modelName.includes('mistral'))) {
+        // Find the first custom endpoint that isn't Gemini (unless no others exist)
+        const possibleEndpoint = endpoints.find(e => e.id !== 'gemini') || endpoints[0];
+        if (possibleEndpoint) {
+          customModel = { name: modelName, endpointId: possibleEndpoint.id };
+        }
+      }
+
       const endpoint = customModel
         ? endpoints.find((e) => e.id === customModel.endpointId)
         : null;

@@ -882,10 +882,27 @@ export default function App() {
         }
 
         try {
-          const res = await fetch(`${ep.url}/models`, {
-            headers: { 'Authorization': `Bearer ${ep.key}` }
-          });
-          if (res.ok) {
+          let res;
+          try {
+            res = await fetch(`${ep.url}/models`, {
+              headers: { 'Authorization': `Bearer ${ep.key}` }
+            });
+          } catch (err: any) {
+            const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+            if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+              res = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+                method: 'GET',
+                headers: { 
+                  'Authorization': `Bearer ${ep.key}`,
+                  'x-target-url': `${ep.url}/models`
+                }
+              });
+            } else {
+              throw err;
+            }
+          }
+
+          if (res && res.ok) {
             const data = await res.json();
             const fetched = (Array.isArray(data.data) ? data.data : []).map((m: any) => ({
               name: m.id,
