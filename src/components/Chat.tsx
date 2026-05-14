@@ -476,6 +476,7 @@ export function Chat({
   onTokenUpdate,
   isSidebarCollapsed = false,
   onAddTokenUsage,
+  syncSettings,
 }: ChatProps) {
   const safeLanguage = normalizeLanguage(language);
   const t = translations[safeLanguage].chat;
