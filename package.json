@@ -34,8 +34,7 @@
     "recharts": "^3.8.1",
     "rehype-katex": "^7.0.1",
     "remark-math": "^6.0.0",
-    "tiktoken": "^1.0.22",
-    "vite": "^6.2.3"
+    "tiktoken": "^1.0.22"
   },
   "devDependencies": {
     "@capacitor/android": "^8.3.3",
