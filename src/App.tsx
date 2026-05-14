@@ -1003,6 +1003,7 @@ export default function App() {
             onTokenUpdate={setTokenUsage}
             isSidebarCollapsed={isSidebarCollapsed}
             onAddTokenUsage={addTokenUsageRecord}
+            syncSettings={syncSettings}
           />
         ) : currentView === 'tokenUsage' ? (
           <TokenUsage

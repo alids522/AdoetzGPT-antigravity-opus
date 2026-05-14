@@ -36,6 +36,54 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use('/api/proxy', async (req, res) => {
+  const targetUrl = req.header('x-target-url');
+  if (!targetUrl) return res.status(400).json({ error: 'x-target-url header missing' });
+
+  try {
+    const headers: any = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (key !== 'host' && key !== 'x-target-url' && key !== 'origin' && key !== 'referer' && key !== 'connection' && key !== 'keep-alive') {
+        headers[key] = value;
+      }
+    }
+
+    const fetchOptions: any = {
+      method: req.method,
+      headers: headers,
+    };
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    res.status(response.status);
+    for (const [key, value] of response.headers.entries()) {
+      if (key !== 'content-encoding' && key !== 'transfer-encoding') {
+        res.setHeader(key, value);
+      }
+    }
+
+    if (response.body) {
+      // @ts-ignore
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    } else {
+      res.end();
+    }
+  } catch (err: any) {
+    console.error('Proxy error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function schemaNameFromConfig(dbConfig: any) {
   const requested = String(dbConfig?.schemaName || process.env.POSTGRES_SCHEMA || 'adoetzgpt');
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(requested)) {

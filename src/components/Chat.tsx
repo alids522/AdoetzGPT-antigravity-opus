@@ -64,6 +64,7 @@ interface ChatProps {
   onTokenUpdate?: (usage: { input: number; output: number; total: number; max: number }) => void;
   isSidebarCollapsed?: boolean;
   onAddTokenUsage?: (record: { model: string; endpoint: string; inputTokens: number; outputTokens: number; totalTokens: number }) => void;
+  syncSettings?: any;
 }
 
 // Context window sizes for common models (in tokens)
@@ -1261,33 +1262,41 @@ export function Chat({
           inputTokensCount += countTokens(msg.content || '');
         }
 
-        const response = await fetch(`${endpoint.url}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${endpoint.key}`,
-          },
-          body: JSON.stringify({
-            model: modelName,
-            messages,
-            tools,
-            stream: true,
-            stream_options: { include_usage: true },
-          }),
-        }).catch((err) => {
-          // Detect CORS errors
-          if (err.name === 'TypeError' && err.message.includes('fetch')) {
-            throw new Error(
-              `CORS Error: The endpoint "${endpoint.name}" does not allow direct browser requests. ` +
-              `This is a security restriction by the API provider.\n\n` +
-              `Solutions:\n` +
-              `1. Use a different API provider that supports CORS\n` +
-              `2. Set up a proxy server to forward requests\n` +
-              `3. Use this app with a backend/proxy instead of directly in the browser`
-            );
+        const payload = {
+          model: modelName,
+          messages,
+          tools,
+          stream: true,
+          stream_options: { include_usage: true },
+        };
+
+        let response;
+        try {
+          response = await fetch(`${endpoint.url}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${endpoint.key}`,
+            },
+            body: JSON.stringify(payload),
+          });
+        } catch (err: any) {
+          // If it's a CORS error (Failed to fetch) and we have a sync server, try via proxy
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && syncSettings?.apiBaseUrl) {
+            const proxyUrl = syncSettings.apiBaseUrl.replace(/\/$/, '') + '/api/proxy';
+            response = await fetch(proxyUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${endpoint.key}`,
+                "x-target-url": `${endpoint.url}/chat/completions`
+              },
+              body: JSON.stringify(payload),
+            });
+          } else {
+            throw err;
           }
-          throw err;
-        });
+        }
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
@@ -1436,20 +1445,40 @@ export function Chat({
               }
             ];
 
-            const followupResponse = await fetch(`${endpoint.url}/chat/completions`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${endpoint.key}`,
-              },
-              body: JSON.stringify({
+            const followupPayload = {
                 model: modelName,
                 messages: toolResponseMessages,
                 tools,
                 stream: true,
                 stream_options: { include_usage: true },
-              }),
-            });
+            };
+
+            let followupResponse;
+            try {
+              followupResponse = await fetch(`${endpoint.url}/chat/completions`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${endpoint.key}`,
+                },
+                body: JSON.stringify(followupPayload),
+              });
+            } catch (err: any) {
+              if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && syncSettings?.apiBaseUrl) {
+                const proxyUrl = syncSettings.apiBaseUrl.replace(/\/$/, '') + '/api/proxy';
+                followupResponse = await fetch(proxyUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${endpoint.key}`,
+                    "x-target-url": `${endpoint.url}/chat/completions`
+                  },
+                  body: JSON.stringify(followupPayload),
+                });
+              } else {
+                throw err;
+              }
+            }
 
             if (followupResponse.ok) {
               const followupReader = followupResponse.body?.getReader();
