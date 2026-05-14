@@ -25,6 +25,7 @@ export interface Message {
     data: string;
     url?: string;
   }[];
+  tokenCount?: number;
 }
 
 export interface Session {
@@ -33,6 +34,7 @@ export interface Session {
   messages: Message[];
   updatedAt: number;
   pinned?: boolean;
+  deleted?: boolean;
 }
 
 export interface Endpoint {
@@ -285,7 +287,12 @@ export default function App() {
       content,
       timestamp: Date.now()
     };
-    setMemories(prev => [newMemory, ...prev]);
+    setMemories(prev => {
+      if (prev.some(m => m.content.toLowerCase().trim() === content.toLowerCase().trim())) {
+        return prev;
+      }
+      return [newMemory, ...prev];
+    });
     return newMemory;
   };
 
@@ -297,7 +304,8 @@ export default function App() {
     setMemories(prev => prev.map(m => m.id === id ? { ...m, content } : m));
   };
 
-  const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0];
+  const activeSessions = useMemo(() => sessions.filter(s => !s.deleted), [sessions]);
+  const currentSession = activeSessions.find(s => s.id === currentSessionId) || activeSessions[0] || { id: 'default', title: 'New Session', messages: [], updatedAt: Date.now() };
 
   useEffect(() => {
     let isMounted = true;
@@ -424,7 +432,7 @@ export default function App() {
 
   const createSession = () => {
     // Don't create a new session if the current one is already empty
-    const current = sessions.find(s => s.id === currentSessionId);
+    const current = activeSessions.find(s => s.id === currentSessionId);
     if (current && current.messages.length === 0) {
       setCurrentView('chat');
       setIsMobileSidebarOpen(false);
@@ -445,16 +453,17 @@ export default function App() {
   const deleteSession = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setSessions(prev => {
-      const filtered = prev.filter(s => s.id !== id);
-      if (filtered.length === 0) {
+      const newSessions = prev.map(s => s.id === id ? { ...s, deleted: true, updatedAt: Date.now() } : s);
+      const newActive = newSessions.filter(s => !s.deleted);
+      if (newActive.length === 0) {
         const newSession = { id: Date.now().toString(), title: 'New Session', messages: [], updatedAt: Date.now() };
         setCurrentSessionId(newSession.id);
-        return [newSession];
+        return [...newSessions, newSession];
       }
       if (id === currentSessionId) {
-        setCurrentSessionId(filtered[0].id);
+        setCurrentSessionId(newActive[0].id);
       }
-      return filtered;
+      return newSessions;
     });
   };
 
@@ -468,8 +477,12 @@ export default function App() {
   };
 
   const clearAll = () => {
-    setSessions([{ id: '1', title: 'New Session', messages: [], updatedAt: Date.now() }]);
-    setCurrentSessionId('1');
+    const newSession = { id: Date.now().toString(), title: 'New Session', messages: [], updatedAt: Date.now() };
+    setSessions(prev => [
+      ...prev.map(s => ({ ...s, deleted: true, updatedAt: Date.now() })),
+      newSession
+    ]);
+    setCurrentSessionId(newSession.id);
     setCurrentView('chat');
   };
 
@@ -589,13 +602,70 @@ export default function App() {
       return;
     }
     setSyncStatus('Syncing...');
-    const state = buildPersistedState();
-    await pushRemoteState(state);
-    const remote = await pullRemoteState(authToken, syncSettings);
-    if (remote) applyState({ ...remote, currentUser, authToken, syncSettings });
-    const syncedAt = Date.now();
-    setLastSyncAt(syncedAt);
-    setSyncStatus('Successfully synced to database.');
+    try {
+      const remote = await pullRemoteState(authToken, syncSettings);
+      const localState = buildPersistedState();
+      
+      let mergedState = localState;
+
+      if (remote) {
+        const sessionMap = new Map<string, Session>();
+        for (const s of localState.sessions) sessionMap.set(s.id, s);
+        for (const s of remote.sessions || []) {
+          const existing = sessionMap.get(s.id);
+          if (!existing || (s.updatedAt || 0) > (existing.updatedAt || 0)) {
+            sessionMap.set(s.id, s);
+          }
+        }
+        const mergedSessions = Array.from(sessionMap.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+
+        const memoryMap = new Map<string, Memory>();
+        for (const m of localState.memories) memoryMap.set(m.id, m);
+        for (const m of remote.memories || []) memoryMap.set(m.id, m);
+        const mergedMemories = Array.from(memoryMap.values()).sort((a, b) => b.timestamp - a.timestamp);
+
+        const usageSet = new Set<string>();
+        const mergedUsage: TokenUsageRecord[] = [];
+        const usageKey = (r: TokenUsageRecord) => `${r.timestamp}-${r.model}-${r.endpoint}`;
+        for (const record of [...localState.tokenUsageData, ...(remote.tokenUsageData || [])]) {
+          const key = usageKey(record);
+          if (!usageSet.has(key)) {
+            usageSet.add(key);
+            mergedUsage.push(record);
+          }
+        }
+        
+        const counterMap = new Map<string, CustomCounter>();
+        for (const c of localState.customCounters) counterMap.set(c.id, c);
+        for (const c of remote.customCounters || []) {
+           const existing = counterMap.get(c.id);
+           if (!existing || c.updatedAt > existing.updatedAt) {
+              counterMap.set(c.id, c);
+           }
+        }
+        const mergedCounters = Array.from(counterMap.values());
+
+        mergedState = {
+          ...remote,
+          currentUser,
+          authToken,
+          syncSettings,
+          sessions: mergedSessions,
+          memories: mergedMemories,
+          tokenUsageData: mergedUsage,
+          customCounters: mergedCounters
+        };
+
+        applyState(mergedState);
+      }
+
+      await pushRemoteState(mergedState);
+      const syncedAt = Date.now();
+      setLastSyncAt(syncedAt);
+      setSyncStatus('Successfully synced to database.');
+    } catch (e: any) {
+      setSyncStatus(e.message || 'Remote sync failed.');
+    }
   };
 
   const saveGuestSession = async (username: string, password: string) => {
@@ -886,7 +956,7 @@ export default function App() {
         setIsOpenMobile={setIsMobileSidebarOpen}
         currentView={currentView}
         setCurrentView={setCurrentView}
-        sessions={sessions}
+        sessions={activeSessions}
         currentSessionId={currentSessionId}
         setCurrentSessionId={setCurrentSessionId}
         createSession={createSession}

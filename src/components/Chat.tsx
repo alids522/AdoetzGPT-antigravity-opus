@@ -1118,6 +1118,7 @@ export function Chat({
         data: f.data,
         url: f.previewUrl,
       })),
+      tokenCount: countTokens(promptTextRaw)
     };
 
     const newMessages = [...session.messages, userMessage];
@@ -1271,6 +1272,7 @@ export function Chat({
             messages,
             tools,
             stream: true,
+            stream_options: { include_usage: true },
           }),
         }).catch((err) => {
           // Detect CORS errors
@@ -1304,6 +1306,7 @@ export function Chat({
         let pendingToolResponse: any = null;
 
         if (reader) {
+          let isInReasoning = false;
           while (true) {
             if (isCanceled.current) {
               reader.cancel();
@@ -1325,7 +1328,13 @@ export function Chat({
 
               try {
                 const data = JSON.parse(dataStr);
-                const delta = data.choices[0]?.delta || {};
+                
+                if (data.usage) {
+                  inputTokensCount = data.usage.prompt_tokens || inputTokensCount;
+                  outputTokensCount = data.usage.completion_tokens || outputTokensCount;
+                }
+
+                const delta = data.choices && data.choices.length > 0 ? data.choices[0].delta || {} : {};
 
                 // Check for tool calls
                 if (delta.tool_calls) {
@@ -1345,9 +1354,22 @@ export function Chat({
                   }
                 }
 
+                // Handle DeepSeek/Ollama reasoning_content
+                if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
+                  if (!isInReasoning) {
+                    isInReasoning = true;
+                    fullText += "<think>\n";
+                  }
+                  fullText += delta.reasoning_content;
+                }
+
                 // Regular content
                 const content = delta.content || "";
                 if (content) {
+                  if (isInReasoning) {
+                    isInReasoning = false;
+                    fullText += "\n</think>\n";
+                  }
                   fullText += content;
                   currentMessages = currentMessages.map((msg) =>
                     msg.id === botMessageId ? { ...msg, text: fullText } : msg,
@@ -1425,6 +1447,7 @@ export function Chat({
                 messages: toolResponseMessages,
                 tools,
                 stream: true,
+                stream_options: { include_usage: true },
               }),
             });
 
@@ -1432,7 +1455,6 @@ export function Chat({
               const followupReader = followupResponse.body?.getReader();
               if (followupReader) {
                 let followupBuffer = "";
-                let followupFullText = fullText;
 
                 while (true) {
                   if (isCanceled.current) {
@@ -1455,11 +1477,18 @@ export function Chat({
 
                     try {
                       const followupData = JSON.parse(followupDataStr);
-                      const followupContent = followupData.choices[0]?.delta?.content || "";
+                      if (followupData.usage) {
+                        inputTokensCount = followupData.usage.prompt_tokens || inputTokensCount;
+                        outputTokensCount = followupData.usage.completion_tokens || outputTokensCount;
+                      }
+                      
+                      const followupContent = followupData.choices && followupData.choices.length > 0 
+                                              ? followupData.choices[0]?.delta?.content || "" 
+                                              : "";
                       if (followupContent) {
-                        followupFullText += followupContent;
+                        fullText += followupContent;
                         currentMessages = currentMessages.map((msg) =>
-                          msg.id === botMessageId ? { ...msg, text: followupFullText } : msg,
+                          msg.id === botMessageId ? { ...msg, text: fullText } : msg,
                         );
                         updateSession(session.id, { messages: currentMessages });
                       }
@@ -1476,7 +1505,9 @@ export function Chat({
         }
 
         // Record token usage for endpoint request
-        outputTokensCount = countTokens(fullText);
+        if (!outputTokensCount) {
+          outputTokensCount = countTokens(fullText);
+        }
         if (onAddTokenUsage) {
           onAddTokenUsage({
             model: modelName,
@@ -1542,7 +1573,8 @@ export function Chat({
           config: {
             systemInstruction: systemInstructionText,
             tools: tools,
-            toolConfig: { includeServerSideToolInvocations: true }
+            toolConfig: { includeServerSideToolInvocations: true },
+            maxOutputTokens: 65536
           },
           history: historyContents
         });
@@ -1660,6 +1692,14 @@ export function Chat({
             totalTokens: inputTokensCount + outputTokensCount
           });
         }
+      }
+
+      // Save final token count to the bot message
+      if (outputTokensCount > 0) {
+        currentMessages = currentMessages.map((msg) =>
+          msg.id === botMessageId ? { ...msg, tokenCount: outputTokensCount } : msg
+        );
+        updateSession(session.id, { messages: currentMessages });
       }
 
       // Generate a better title on the first message
@@ -2008,28 +2048,35 @@ Title:`;
 
                 {/* User message action buttons */}
                 {msg.sender === "user" && editingMessageId !== msg.id && (
-                  <div className="flex items-center gap-1 px-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
-                    <button
-                      onClick={() => handleCopyMessage(msg.text)}
-                      className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
-                      title="Copy"
-                    >
-                      <Copy size={12} />
-                    </button>
-                    <button
-                      onClick={() => handleStartEdit(msg)}
-                      className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
-                      title="Edit"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteMessage(msg.id)}
-                      className="text-on-surface-variant hover:text-error transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                  <div className="flex items-center px-2 mt-1 w-full">
+                    {msg.tokenCount !== undefined && (
+                      <span className="text-[10px] text-on-surface-variant opacity-50 font-mono" title="Token count">
+                        {msg.tokenCount} tokens
+                      </span>
+                    )}
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
+                      <button
+                        onClick={() => handleCopyMessage(msg.text)}
+                        className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
+                        title="Copy"
+                      >
+                        <Copy size={12} />
+                      </button>
+                      <button
+                        onClick={() => handleStartEdit(msg)}
+                        className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
+                        title="Edit"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMessage(msg.id)}
+                        className="text-on-surface-variant hover:text-error transition-colors p-1.5 rounded-md hover:bg-surface-dim flex items-center gap-1 text-[10px] uppercase font-semibold tracking-wider"
+                        title="Delete"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -2058,11 +2105,18 @@ Title:`;
                         <span>Regenerate</span>
                       </button>
                     )}
-                    {msg.model && (
-                      <span className="text-[10px] text-on-surface-variant opacity-50 font-mono ml-auto" title="Model used">
-                        {msg.model}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 ml-auto">
+                      {msg.tokenCount !== undefined && (
+                        <span className="text-[10px] text-on-surface-variant opacity-50 font-mono" title="Token count">
+                          {msg.tokenCount} tokens
+                        </span>
+                      )}
+                      {msg.model && (
+                        <span className="text-[10px] text-on-surface-variant opacity-50 font-mono" title="Model used">
+                          {msg.model}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
