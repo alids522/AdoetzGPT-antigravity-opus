@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { Chat } from './components/Chat';
@@ -639,7 +639,7 @@ export default function App() {
         for (const c of localState.customCounters) counterMap.set(c.id, c);
         for (const c of remote.customCounters || []) {
            const existing = counterMap.get(c.id);
-           if (!existing || c.updatedAt > existing.updatedAt) {
+           if (!existing) {
               counterMap.set(c.id, c);
            }
         }
