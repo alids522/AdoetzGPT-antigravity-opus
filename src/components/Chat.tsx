@@ -1282,9 +1282,10 @@ export function Chat({
             body: JSON.stringify(payload),
           });
         } catch (err: any) {
+          const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
           // If it's a CORS error (Failed to fetch) and we have a sync server, try via proxy
-          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && syncSettings?.apiBaseUrl) {
-            const proxyUrl = syncSettings.apiBaseUrl.replace(/\/$/, '') + '/api/proxy';
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+            const proxyUrl = baseUrl.replace(/\/$/, '') + '/api/proxy';
             response = await fetch(proxyUrl, {
               method: "POST",
               headers: {
@@ -1465,8 +1466,9 @@ export function Chat({
                 body: JSON.stringify(followupPayload),
               });
             } catch (err: any) {
-              if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && syncSettings?.apiBaseUrl) {
-                const proxyUrl = syncSettings.apiBaseUrl.replace(/\/$/, '') + '/api/proxy';
+              const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+              if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+                const proxyUrl = baseUrl.replace(/\/$/, '') + '/api/proxy';
                 followupResponse = await fetch(proxyUrl, {
                   method: "POST",
                   headers: {
