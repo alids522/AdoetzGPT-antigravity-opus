@@ -25,6 +25,10 @@ export interface PersistedAppState {
 }
 
 const APP_STATE_KEY = 'adoetzgpt.appState';
+const LEGACY_APP_STATE_KEY = 'appState';
+const LOCAL_TEXT_LIMIT = 12000;
+const LOCAL_ATTACHMENT_DATA_LIMIT = 12000;
+const HISTORY_LIMITS = [50, 25, 10, 5, 1, 0];
 
 function apiUrl(syncSettings?: SyncSettings, path = '') {
   const base = syncSettings?.apiBaseUrl?.trim().replace(/\/$/, '') || '';
@@ -56,7 +60,7 @@ function databasePayload(syncSettings: SyncSettings) {
 
 function loadLocalState(): PersistedAppState | null {
   try {
-    const saved = localStorage.getItem(APP_STATE_KEY) || localStorage.getItem('appState');
+    const saved = localStorage.getItem(APP_STATE_KEY) || localStorage.getItem(LEGACY_APP_STATE_KEY);
     return saved ? JSON.parse(saved) : null;
   } catch (error) {
     console.warn('Unable to read local app state fallback.', error);
@@ -64,8 +68,80 @@ function loadLocalState(): PersistedAppState | null {
   }
 }
 
+function isQuotaExceeded(error: any): boolean {
+  return error?.name === 'QuotaExceededError' || error?.code === 22 || error?.code === 1014;
+}
+
+function compactText(text: string, limit: number): string {
+  if (!text || text.length <= limit) return text;
+  return `${text.slice(0, Math.floor(limit * 0.65))}\n\n[Earlier saved content compacted]\n\n${text.slice(-Math.floor(limit * 0.35))}`;
+}
+
+function compactMessage(message: Session['messages'][number], textLimit: number) {
+  return {
+    ...message,
+    text: compactText(message.text, textLimit),
+    attachments: message.attachments?.map((attachment) => ({
+      ...attachment,
+      data: attachment.data.length > LOCAL_ATTACHMENT_DATA_LIMIT ? '' : attachment.data,
+    })),
+  };
+}
+
+function compactStateForLocalStorage(state: PersistedAppState, messageLimit: number, textLimit = LOCAL_TEXT_LIMIT): PersistedAppState {
+  return {
+    ...state,
+    sessions: state.sessions.map((session) => ({
+      ...session,
+      messages: session.messages.slice(-messageLimit).map((message) => compactMessage(message, textLimit)),
+    })),
+    tokenUsageData: state.tokenUsageData.slice(-500),
+  };
+}
+
+function saveStateJson(json: string): void {
+  localStorage.removeItem(LEGACY_APP_STATE_KEY);
+  localStorage.setItem(APP_STATE_KEY, json);
+}
+
 function saveLocalState(state: PersistedAppState): void {
-  localStorage.setItem(APP_STATE_KEY, JSON.stringify(state));
+  let lastError: unknown;
+
+  for (const messageLimit of HISTORY_LIMITS) {
+    try {
+      const textLimit = messageLimit <= 5 ? 4000 : LOCAL_TEXT_LIMIT;
+      saveStateJson(JSON.stringify(compactStateForLocalStorage(state, messageLimit, textLimit)));
+      return;
+    } catch (error: any) {
+      if (!isQuotaExceeded(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  try {
+    saveStateJson(JSON.stringify({
+      ...state,
+      sessions: state.sessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        pinned: session.pinned,
+        deleted: session.deleted,
+        messages: [],
+      })),
+      memories: [],
+      tokenUsageData: [],
+      customCounters: [],
+      savedAt: state.savedAt,
+    }));
+  } catch (error) {
+    console.warn('[Storage] Local storage is full; saved only current session pointer.', error || lastError);
+    try {
+      localStorage.setItem('adoetzgpt.currentSession', state.currentSessionId);
+    } catch {
+      // Nothing else can be persisted in this browser quota.
+    }
+  }
 }
 
 export async function loadPersistedState(): Promise<PersistedAppState | null> {

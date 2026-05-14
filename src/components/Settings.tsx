@@ -10,6 +10,7 @@ interface SettingsProps {
   setGeminiApiKey: (key: string) => void;
   endpoints: Endpoint[];
   setEndpoints: (endpoints: Endpoint[]) => void;
+  endpointModels: { name: string; endpointId: string }[];
   geminiModels: string[];
   onFetchModels: () => Promise<void>;
   onSave: () => void;
@@ -36,6 +37,7 @@ export function Settings({
   setGeminiApiKey,
   endpoints, 
   setEndpoints, 
+  endpointModels,
   geminiModels, 
   onFetchModels, 
   onSave,
@@ -916,6 +918,121 @@ export function Settings({
             <p className="text-[10px] text-on-surface-variant italic leading-relaxed">
               Define the tone and style used for standard text messages and thinking processes.
             </p>
+          </div>
+        </section>
+
+        {/* Web Search Section */}
+        <section className="space-y-6">
+          <div className="flex items-center gap-2 border-b border-outline pb-2">
+            <Activity size={16} className="text-on-surface-variant" />
+            <h2 className="text-lg font-display uppercase tracking-widest font-semibold text-primary">Web Search</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4 md:col-span-2">
+              <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Search Mode</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 'off' as const, label: 'Off' },
+                  { value: 'auto' as const, label: 'Auto' },
+                  { value: 'on' as const, label: 'On' },
+                ].map(option => (
+                  <button
+                    key={option.value}
+                    onClick={() => setGenSettings({ ...genSettings, webSearchMode: option.value })}
+                    className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchMode === option.value ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-on-surface-variant italic leading-relaxed">
+                Auto asks the currently selected chat model whether search is needed. On always searches. Off never searches.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Search Provider</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    const geminiSearchModel = [genSettings.webSearchModel, ...geminiModels].find(model => model && model.includes('gemini')) || 'gemini-flash-lite-latest';
+                    setGenSettings({ ...genSettings, webSearchProvider: 'gemini', webSearchModel: geminiSearchModel });
+                  }}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchProvider !== 'endpoint' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                >
+                  Gemini Grounding
+                </button>
+                <button
+                  onClick={() => {
+                    const firstEndpoint = endpoints.find(ep => ep.url && ep.key) || endpoints[0];
+                    const firstModel = endpointModels.find(m => m.endpointId === firstEndpoint?.id);
+                    const currentEndpointModel = endpointModels.find(m => m.name === genSettings.webSearchModel);
+                    setGenSettings({
+                      ...genSettings,
+                      webSearchProvider: 'endpoint',
+                      webSearchEndpointId: currentEndpointModel?.endpointId || genSettings.webSearchEndpointId || firstEndpoint?.id || '',
+                      webSearchModel: currentEndpointModel?.name || firstModel?.name || '',
+                    });
+                  }}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchProvider === 'endpoint' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                >
+                  Endpoint
+                </button>
+              </div>
+              <p className="text-[10px] text-on-surface-variant italic leading-relaxed">
+                Gemini Grounding performs the actual Google Search pre-pass. Endpoint search only works when your provider/model has live web access.
+              </p>
+            </div>
+
+            {genSettings.webSearchProvider === 'endpoint' ? (
+              <div className="space-y-4">
+                <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Endpoint Search Model</label>
+                <select
+                  value={genSettings.webSearchEndpointId}
+                  onChange={(e) => {
+                    const nextEndpointId = e.target.value;
+                    const firstModel = endpointModels.find(m => m.endpointId === nextEndpointId);
+                    setGenSettings({
+                      ...genSettings,
+                      webSearchEndpointId: nextEndpointId,
+                      webSearchModel: firstModel?.name || '',
+                    });
+                  }}
+                  className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
+                >
+                  <option value="">Select endpoint</option>
+                  {endpoints.map(ep => (
+                    <option key={ep.id} value={ep.id}>{ep.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={genSettings.webSearchModel}
+                  onChange={(e) => setGenSettings({ ...genSettings, webSearchModel: e.target.value })}
+                  className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
+                >
+                  <option value="">Select model</option>
+                  {endpointModels
+                    .filter(model => !genSettings.webSearchEndpointId || model.endpointId === genSettings.webSearchEndpointId)
+                    .map(model => (
+                      <option key={`${model.endpointId}:${model.name}`} value={model.name}>{model.name}</option>
+                    ))}
+                </select>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Gemini Search Model</label>
+                <select
+                  value={genSettings.webSearchModel || 'gemini-flash-lite-latest'}
+                  onChange={(e) => setGenSettings({ ...genSettings, webSearchModel: e.target.value })}
+                  className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
+                >
+                  {Array.from(new Set(['gemini-flash-lite-latest', 'gemini-2.5-flash', ...geminiModels])).map(model => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

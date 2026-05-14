@@ -43,12 +43,12 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Session, Message, GenerationSettings, VoiceSettings } from "../App";
 import { translations, Language, normalizeLanguage } from "../translations";
 import { startNativeLiveConversationService, stopNativeLiveConversationService } from "../native/liveConversation";
-import { 
-  Share 
+import {
+  Share
 } from "@capacitor/share";
-import { 
-  Filesystem, 
-  Directory 
+import {
+  Filesystem,
+  Directory
 } from "@capacitor/filesystem";
 import JSZip from "jszip";
 import { encoding_for_model, get_encoding } from 'tiktoken';
@@ -57,8 +57,6 @@ interface ChatProps {
   selectedModel?: string;
   isThinkingMode?: boolean;
   setIsThinkingMode?: (val: boolean) => void;
-  isSearchMode?: boolean;
-  setIsSearchMode?: (mode: boolean) => void;
   isArtifactMode?: boolean;
   setIsArtifactMode?: (mode: boolean) => void;
   session: Session;
@@ -69,6 +67,7 @@ interface ChatProps {
   endpoints: any[];
   endpointModels: { name: string; endpointId: string }[];
   genSettings: GenerationSettings;
+  setGenSettings?: (settings: GenerationSettings) => void;
   voiceSettings: VoiceSettings;
   geminiApiKey?: string;
   language: Language;
@@ -340,16 +339,16 @@ const parseProjectFiles = (text: string): ProjectFile[] => {
   while ((match = codeBlockRegex.exec(text)) !== null) {
     const language = match[1] || 'text';
     const content = match[2].trim();
-    
+
     // Look at the first line for something like "file: index.html" inside a comment
     const firstLine = content.split('\n')[0];
     const fileMatch = firstLine.match(/file:\s*([a-zA-Z0-9_.-]+)/i);
-    
+
     if (fileMatch && fileMatch[1]) {
       const fileName = fileMatch[1];
       // Remove the first line so the comment doesn't show in the preview/code
       const cleanContent = content.substring(firstLine.length).trim();
-      
+
       files.push({
         name: fileName,
         content: cleanContent || content, // Fallback if clean fails
@@ -477,11 +476,10 @@ const ProjectPreview = ({ files }: { files: ProjectFile[] }) => {
               <button
                 key={page.name}
                 onClick={() => setCurrentFileName(page.name)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-all group ${
-                  isActive
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-all group ${isActive
                     ? 'bg-primary text-on-primary shadow-[0_0_15px_rgba(var(--primary-rgb),0.3)]'
                     : 'text-white/40 hover:bg-white/5 hover:text-white/70'
-                }`}
+                  }`}
               >
                 <Globe size={12} className={isActive ? 'animate-pulse' : 'opacity-50 group-hover:opacity-100'} />
                 <span className="text-[10px] font-medium truncate">{page.name}</span>
@@ -541,13 +539,13 @@ const ArtifactProject = ({ files }: { files: ProjectFile[] }) => {
     // Create blobs for ALL files in the project
     const fileMap: Record<string, string> = {};
     const blobUrls: string[] = [];
-    
+
     files.forEach(file => {
       let type = 'text/plain';
       if (file.name.endsWith('.html')) type = 'text/html';
       else if (file.name.endsWith('.css')) type = 'text/css';
       else if (file.name.endsWith('.js')) type = 'text/javascript';
-      
+
       const blob = new Blob([file.content], { type });
       const url = URL.createObjectURL(blob);
       fileMap[file.name] = url;
@@ -565,7 +563,7 @@ const ArtifactProject = ({ files }: { files: ProjectFile[] }) => {
 
     const finalBlob = new Blob([html], { type: 'text/html' });
     const finalUrl = URL.createObjectURL(finalBlob);
-    
+
     // Create a temporary anchor element to trigger the download/open
     const link = document.createElement('a');
     link.href = finalUrl;
@@ -574,7 +572,7 @@ const ArtifactProject = ({ files }: { files: ProjectFile[] }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    
+
     // Note: We don't revoke the URL immediately to give the new tab time to load
     setTimeout(() => URL.revokeObjectURL(finalUrl), 10000);
   };
@@ -627,9 +625,9 @@ const ArtifactProject = ({ files }: { files: ProjectFile[] }) => {
         // Export single file directly
         const file = files[0];
         const mimeType = file.name.endsWith('.html') ? 'text/html' :
-                        file.name.endsWith('.css') ? 'text/css' :
-                        file.name.endsWith('.js') ? 'text/javascript' :
-                        'text/plain';
+          file.name.endsWith('.css') ? 'text/css' :
+            file.name.endsWith('.js') ? 'text/javascript' :
+              'text/plain';
         const blob = new Blob([file.content], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -725,11 +723,10 @@ const CodeBlock = ({ children, className, language }: { children: string, classN
           {isPreviewable && (
             <button
               onClick={() => setIsPreviewOpen(!isPreviewOpen)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${
-                isPreviewOpen 
-                  ? "bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20" 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${isPreviewOpen
+                  ? "bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20"
                   : "text-gray-400 hover:bg-white/10 hover:text-white"
-              }`}
+                }`}
             >
               {isPreviewOpen ? (
                 <>
@@ -746,11 +743,10 @@ const CodeBlock = ({ children, className, language }: { children: string, classN
           )}
           <button
             onClick={handleCopy}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${
-              copied 
-                ? "bg-green-500/10 text-green-500 ring-1 ring-green-500/20" 
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${copied
+                ? "bg-green-500/10 text-green-500 ring-1 ring-green-500/20"
                 : "text-gray-400 hover:bg-white/10 hover:text-white"
-            }`}
+              }`}
           >
             {copied ? (
               <>
@@ -771,9 +767,9 @@ const CodeBlock = ({ children, className, language }: { children: string, classN
           {language === 'svg' ? (
             <div className="w-full h-full flex items-center justify-center p-4" dangerouslySetInnerHTML={{ __html: children }} />
           ) : (
-            <iframe 
-              srcDoc={children} 
-              className="w-full h-full min-h-[400px] border-0" 
+            <iframe
+              srcDoc={children}
+              className="w-full h-full min-h-[400px] border-0"
               sandbox="allow-scripts allow-forms allow-same-origin"
               title="Artifact Preview"
             />
@@ -834,7 +830,7 @@ const baseMarkdownComponents: any = {
         const className = codeNode.properties?.className?.[0] || '';
         const match = /language-(\w+)/.exec(className || "");
         const language = match ? match[1] : undefined;
-        
+
         let codeText = "";
         const extractText = (hastNode: any) => {
           if (hastNode.type === 'text') codeText += hastNode.value;
@@ -855,8 +851,8 @@ const baseMarkdownComponents: any = {
   },
   code({ className, children, ...props }: any) {
     return (
-      <code 
-        className="bg-primary/5 text-primary px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border border-primary/10 mx-0.5" 
+      <code
+        className="bg-primary/5 text-primary px-1.5 py-0.5 rounded-md font-mono text-[0.9em] border border-primary/10 mx-0.5"
         {...props}
       >
         {children}
@@ -888,8 +884,6 @@ export function Chat({
   selectedModel,
   isThinkingMode,
   setIsThinkingMode,
-  isSearchMode,
-  setIsSearchMode,
   isArtifactMode,
   setIsArtifactMode,
   session,
@@ -897,6 +891,7 @@ export function Chat({
   endpoints,
   endpointModels,
   genSettings,
+  setGenSettings,
   voiceSettings,
   geminiApiKey,
   language,
@@ -921,6 +916,7 @@ export function Chat({
   const isCanceled = useRef(false);
   const currentBotMessageIdRef = useRef<string | null>(null);
   const currentUserMessageIdRef = useRef<string | null>(null);
+  const liveUserTranscriptRef = useRef("");
 
   const liveSessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -1090,7 +1086,7 @@ export function Chat({
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
           const openAiEndpoint = endpoints.find(e => e.name.toLowerCase().includes('openai'))?.url || 'https://api.openai.com/v1';
           const openAiKey = endpoints.find(e => e.name.toLowerCase().includes('openai'))?.key;
-          
+
           if (!openAiKey) {
             alert("Please set your OpenAI API key in Settings for Speech-to-Text.");
             return;
@@ -1100,7 +1096,7 @@ export function Chat({
           const formData = new FormData();
           formData.append('file', file);
           formData.append('model', 'whisper-1');
-          
+
           try {
             const response = await fetch(`${openAiEndpoint}/audio/transcriptions`, {
               method: 'POST',
@@ -1113,8 +1109,8 @@ export function Chat({
             if (data.text) {
               setInputText(prev => prev ? prev + ' ' + data.text : data.text);
             } else if (data.error) {
-               console.error("Whisper error:", data.error);
-               alert("Transcription error: " + data.error.message);
+              console.error("Whisper error:", data.error);
+              alert("Transcription error: " + data.error.message);
             }
           } catch (error) {
             console.error("STT Error:", error);
@@ -1327,6 +1323,7 @@ export function Chat({
               const text = serverContent.inputTranscription.text;
               const isFinished = serverContent.inputTranscription.finished;
               if (text) {
+                liveUserTranscriptRef.current += text;
                 if (!currentUserMessageIdRef.current) {
                   currentUserMessageIdRef.current = "live-user-" + Date.now();
                   updateSession(session.id, (prev) => ({
@@ -1356,28 +1353,36 @@ export function Chat({
               if (isFinished) {
                 // Generate title for live sessions on first completed user message
                 if (session.title === 'New Session' || !session.title) {
-                  const liveText = session.messages.filter(m => m.sender === 'user').map(m => m.text).join(' ').trim();
+                  const liveText = liveUserTranscriptRef.current.trim() || session.messages.filter(m => m.sender === 'user').map(m => m.text).join(' ').trim();
                   if (liveText) {
-                    try {
-                      const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
-                      if (effectiveApiKey) {
+                    let titleUpdated = false;
+                    // Only use Gemini API for title if selected model is Gemini-compatible
+                    if (canUseGeminiForTitle()) {
+                      try {
+                        const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
                         const titleAi = new GoogleGenAI({ apiKey: effectiveApiKey });
                         const res = await titleAi.models.generateContent({
-                          model: "gemini-2.5-flash",
+                          model: selectedModel,
                           contents: `Create a 3-4 word Title Case title (no punctuation, no quotes) for this voice conversation topic: "${liveText.substring(0, 200)}". Output ONLY the title.`
                         });
                         if (res.text) {
                           const t = res.text.trim().replace(/^["']|["']$/g, '').replace(/[.!?,;:]+$/, '');
-                          if (t && t.length > 1 && t.length < 50) updateSession(session.id, { title: t });
+                          if (t && t.length > 1 && t.length < 50) {
+                            updateSession(session.id, { title: t });
+                            titleUpdated = true;
+                          }
                         }
-                      } else {
-                        updateSession(session.id, { title: liveText.substring(0, 30) });
+                      } catch (e) {
+                        console.warn('[Voice Title] Generation failed, using fallback');
                       }
-                    } catch (e) {
+                    }
+                    // Fallback: use first 30 chars of user input
+                    if (!titleUpdated) {
                       updateSession(session.id, { title: liveText.substring(0, 30) });
                     }
                   }
                 }
+                liveUserTranscriptRef.current = "";
                 currentUserMessageIdRef.current = null;
               }
             }
@@ -1436,11 +1441,13 @@ export function Chat({
               audioQueueRef.current = [];
               currentBotMessageIdRef.current = null;
               currentUserMessageIdRef.current = null;
+              liveUserTranscriptRef.current = "";
             }
 
             if (message.serverContent?.turnComplete) {
               currentBotMessageIdRef.current = null;
               currentUserMessageIdRef.current = null;
+              liveUserTranscriptRef.current = "";
             }
           },
           onerror: (e) => {
@@ -1531,16 +1538,18 @@ export function Chat({
     setIsSearching(false);
   };
 
-  // Auto-detect if web search is needed for the query
-  const detectSearchNeed = async (query: string): Promise<boolean> => {
-    const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
-    if (!effectiveApiKey) return false;
+  // Helper to check if model is Gemini-compatible
+  const isGeminiModel = (model: string): boolean => {
+    return model?.includes('gemini') || model?.includes('flash') || model?.includes('pro') || model?.includes('gemma');
+  };
 
-    try {
-      const detectionAi = new GoogleGenAI({ apiKey: effectiveApiKey });
-      const result = await detectionAi.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Analyze this user query and determine if it requires web search to provide accurate, up-to-date information.
+  // Check if we can use Gemini API for title generation
+  const canUseGeminiForTitle = (): boolean => {
+    const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+    return effectiveApiKey && selectedModel && isGeminiModel(selectedModel);
+  };
+
+  const searchDetectionPrompt = (query: string) => `Analyze this user query and determine if it requires web search to provide accurate, up-to-date information.
 
 Query: "${query}"
 
@@ -1561,14 +1570,195 @@ Web search is NOT needed for:
 - Math problems, calculations
 - Personal advice, opinions
 - Historical facts
-- How-to instructions`,
+- How-to instructions`;
+
+  const detectSearchNeed = async (query: string, modelName: string, endpoint?: any): Promise<boolean> => {
+    try {
+      let responseText = '';
+
+      if (endpoint) {
+        const payload = {
+          model: modelName,
+          messages: [
+            {
+              role: 'system',
+              content: 'You decide if a user query needs live web search. Reply only true or false.',
+            },
+            {
+              role: 'user',
+              content: searchDetectionPrompt(query),
+            },
+          ],
+          temperature: 0,
+          max_tokens: 8,
+        };
+
+        let response: Response;
+        try {
+          response = await fetch(`${endpoint.url}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${endpoint.key}`,
+            },
+            body: JSON.stringify(payload),
+          });
+        } catch (err: any) {
+          const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+            response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${endpoint.key}`,
+                'x-target-url': `${endpoint.url}/chat/completions`,
+              },
+              body: JSON.stringify(payload),
+            });
+          } else {
+            throw err;
+          }
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error?.message || 'Search detection failed.');
+        }
+
+        const data = await response.json();
+        responseText = data?.choices?.[0]?.message?.content || '';
+      } else {
+        const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+        if (!effectiveApiKey) return false;
+
+        const detectionAi = new GoogleGenAI({ apiKey: effectiveApiKey });
+        const result = await detectionAi.models.generateContent({
+          model: modelName,
+          contents: searchDetectionPrompt(query),
+        });
+        responseText = result.text || '';
+      }
+
+      const response = responseText.trim().toLowerCase();
+      return response === 'true' || response === 'yes' || response.includes('true');
+    } catch (err: any) {
+      // Handle quota errors gracefully
+      if (err?.message?.includes('quota') || err?.status === 429) {
+        console.warn('[Auto-detect] Quota exceeded, skipping search detection');
+      } else {
+        console.warn('[Auto-detect] Failed:', err);
+      }
+      return false;
+    }
+  };
+
+  const performWebSearch = async (query: string): Promise<string> => {
+    setIsSearching(true);
+    setSearchStatus('Searching the web...');
+
+    try {
+      if (genSettings.webSearchProvider === 'endpoint') {
+        const searchEndpoint = endpoints.find(e => e.id === genSettings.webSearchEndpointId);
+        const searchModel = genSettings.webSearchModel;
+
+        if (!searchEndpoint?.url || !searchEndpoint?.key || !searchModel) {
+          throw new Error('Web search endpoint or model is not configured.');
+        }
+
+        const payload = {
+          model: searchModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'Use your live web search capability if available. Return a concise research summary with source links. If you do not have live web access, say that clearly.',
+            },
+            {
+              role: 'user',
+              content: query,
+            },
+          ],
+          temperature: 0.2,
+        };
+
+        let response: Response;
+        try {
+          response = await fetch(`${searchEndpoint.url}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${searchEndpoint.key}`,
+            },
+            body: JSON.stringify(payload),
+          });
+        } catch (err: any) {
+          const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+            response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${searchEndpoint.key}`,
+                'x-target-url': `${searchEndpoint.url}/chat/completions`,
+              },
+              body: JSON.stringify(payload),
+            });
+          } else {
+            throw err;
+          }
+        }
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error?.message || 'Endpoint web search failed.');
+        }
+
+        const data = await response.json();
+        const searchText = data?.choices?.[0]?.message?.content?.trim();
+        if (!searchText) throw new Error('Endpoint web search returned no text.');
+
+        setSearchStatus('Endpoint search complete');
+        setTimeout(() => setSearchStatus(null), 3000);
+        return `\n\n[Web Search Results]\n${searchText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
+      }
+
+      const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+      if (!effectiveApiKey) throw new Error('Gemini API key is required for Gemini Grounding search.');
+
+      const searchAi = new GoogleGenAI({ apiKey: effectiveApiKey });
+      const searchResult = await searchAi.models.generateContent({
+        model: genSettings.webSearchModel || 'gemini-flash-lite-latest',
+        contents: query,
+        config: {
+          tools: [{ googleSearch: {} }],
+        }
       });
 
-      const response = result.text?.trim().toLowerCase();
-      return response === 'true' || response === 'yes' || response.includes('true');
-    } catch (err) {
-      console.warn('Auto-detect search failed:', err);
-      return false;
+      if (!searchResult.text) throw new Error('Gemini web search returned no text.');
+
+      let sourcesText = '';
+      let sourceCount = 0;
+      try {
+        const groundingMetadata = (searchResult as any)?.candidates?.[0]?.groundingMetadata;
+        if (groundingMetadata?.groundingChunks) {
+          const chunks = groundingMetadata.groundingChunks;
+          const validSources = chunks
+            .map((c: any, i: number) => c.web?.uri && c.web?.title ? `[${i + 1}] [${c.web.title}](${c.web.uri})` : null)
+            .filter(Boolean);
+
+          sourceCount = chunks.length;
+          if (validSources.length > 0) {
+            sourcesText = "\n\nSources:\n" + validSources.join('\n');
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to parse search sources", e);
+      }
+
+      setSearchStatus(`Found ${sourceCount} source${sourceCount !== 1 ? 's' : ''}`);
+      setTimeout(() => setSearchStatus(null), 3000);
+      return `\n\n[Web Search Results]\n${searchResult.text}${sourcesText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite the sources provided using standard markdown links:\n`;
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -1604,15 +1794,7 @@ Web search is NOT needed for:
 
     updateSession(session.id, {
       messages: newMessages,
-      title:
-        session.messages.length === 0
-          ? (
-              inputText.trim() ||
-              (attachedFiles.length > 0
-                ? (safeLanguage === 'en' ? `Sent ${attachedFiles.length} file(s)` : `Mengirim ${attachedFiles.length} file`)
-                : translations[safeLanguage].sidebar.newSession)
-            ).substring(0, 30)
-          : session.title,
+      title: session.title,
     });
 
     setInputText("");
@@ -1659,7 +1841,7 @@ Web search is NOT needed for:
 
       // Check if it's an endpoint model
       let customModel = endpointModels.find((m) => m.name === modelName);
-      
+
       // Fallback: If not found in list but we have custom endpoints, check if the model name suggests a non-Gemini endpoint
       if (!customModel && endpoints.length > 0 && (modelName.includes('/') || modelName.includes('llama') || modelName.includes('qwen') || modelName.includes('mistral'))) {
         // Find the first custom endpoint that isn't Gemini (unless no others exist)
@@ -1672,6 +1854,31 @@ Web search is NOT needed for:
       const endpoint = customModel
         ? endpoints.find((e) => e.id === customModel.endpointId)
         : null;
+
+      // Apply the search mode from Preferences.
+      let searchContext = "";
+      let shouldSearch = genSettings.webSearchMode === 'on';
+
+      if (genSettings.webSearchMode === 'auto') {
+        setSearchStatus('detecting...');
+        shouldSearch = await detectSearchNeed(promptTextRaw, modelName, endpoint);
+        setSearchStatus(null);
+      }
+
+      if (shouldSearch) {
+        try {
+          searchContext = await performWebSearch(promptTextRaw);
+        } catch (searchErr: any) {
+          if (searchErr?.message?.includes('quota') || searchErr?.status === 429) {
+            console.warn('[Web Search] Quota exceeded, skipping search');
+            setSearchStatus('Search quota exceeded');
+          } else {
+            console.warn("Web search failed, proceeding without search context:", searchErr);
+            setSearchStatus(searchErr?.message || 'Search failed');
+          }
+          setTimeout(() => setSearchStatus(null), 2500);
+        }
+      }
 
       if (endpoint) {
         // Build history messages from session (excluding empty messages)
@@ -1687,68 +1894,6 @@ Web search is NOT needed for:
         if (memories.length > 0) {
           const memoryList = memories.map(m => `- ${m.content}`).join('\n');
           memoryPrompt = `\n\n=== IMPORTANT - USER CONTEXT YOU MUST REMEMBER ===\nThe following information contains important facts about the user that you should remember and use throughout the conversation:\n${memoryList}\n\nUse this information to provide personalized responses. When relevant, reference these facts naturally in your answers.\n=== END OF USER CONTEXT ===\n\n`;
-        }
-
-        // Auto-detect or use manual search mode
-        let searchContext = "";
-        let shouldSearch = isSearchMode;
-
-        // Auto-detect if search is needed (only when not manually disabled)
-        if (!isSearchMode) {
-          setSearchStatus('detecting...');
-          shouldSearch = await detectSearchNeed(promptTextRaw);
-          setSearchStatus(null);
-        }
-
-        if (shouldSearch) {
-          try {
-            setIsSearching(true);
-            setSearchStatus('Searching the web...');
-            const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
-            if (effectiveApiKey) {
-              const searchAi = new GoogleGenAI({ apiKey: effectiveApiKey });
-              const searchResult = await searchAi.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Search the web for the following query and provide a comprehensive summary of the results. Query: ${promptTextRaw}`,
-                config: {
-                  tools: [{ googleSearch: {} }],
-                }
-              });
-
-              if (searchResult.text) {
-                let sourcesText = "";
-                let sourceCount = 0;
-                try {
-                  const groundingMetadata = (searchResult as any)?.candidates?.[0]?.groundingMetadata;
-                  if (groundingMetadata?.groundingChunks) {
-                    const chunks = groundingMetadata.groundingChunks;
-                    const validSources = chunks
-                      .map((c: any, i: number) => c.web?.uri && c.web?.title ? `[${i + 1}] [${c.web.title}](${c.web.uri})` : null)
-                      .filter(Boolean);
-
-                    sourceCount = chunks.length;
-                    if (validSources.length > 0) {
-                      sourcesText = "\n\nSources:\n" + validSources.join('\n');
-                    }
-                  }
-                } catch (e) {
-                  console.warn("Failed to parse search sources", e);
-                }
-
-                searchContext = `\n\n[Web Search Results]\n${searchResult.text}${sourcesText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite the sources provided using standard markdown links:\n`;
-
-                // Add search completed indicator
-                setSearchStatus(`Found ${sourceCount} source${sourceCount !== 1 ? 's' : ''}`);
-                setTimeout(() => setSearchStatus(null), 3000);
-              }
-            }
-          } catch (searchErr) {
-            console.warn("Web search failed, proceeding without search context:", searchErr);
-            setSearchStatus('Search failed');
-            setTimeout(() => setSearchStatus(null), 2000);
-          } finally {
-            setIsSearching(false);
-          }
         }
 
         // Combine all context: memories + search + user prompt
@@ -1768,10 +1913,44 @@ Web search is NOT needed for:
           content: `You are a helpful AI assistant. Pay attention to any user context or memories shared in the conversation.${memoryToolInstruction}${artifactInstruction}`
         };
 
+        // Build user message with images for custom endpoints (OpenAI format)
+        let userMessage;
+        if (attachedFiles.length > 0) {
+          // Use content array format for images (OpenAI multimodal format)
+          const contentArray: any[] = [
+            { type: "text", text: finalPrompt }
+          ];
+
+          // Add images using image_url format
+          for (const file of attachedFiles) {
+            if (file.type.startsWith('image/')) {
+              contentArray.push({
+                type: "image_url",
+                image_url: {
+                  url: `data:${file.type};base64,${file.data}`
+                }
+              });
+            } else {
+              // For non-image files, add as text reference
+              contentArray.push({
+                type: "text",
+                text: `\n[Attached file: ${file.name}]`
+              });
+            }
+          }
+
+          userMessage = {
+            role: "user",
+            content: contentArray
+          };
+        } else {
+          userMessage = { role: "user", content: finalPrompt };
+        }
+
         const messages = [
           systemMessage,
           ...historyMessages,
-          { role: "user", content: finalPrompt }
+          userMessage
         ];
 
         // Debug logging to verify memories are being sent
@@ -1868,7 +2047,7 @@ Web search is NOT needed for:
 
               try {
                 const data = JSON.parse(dataStr);
-                
+
                 if (data.usage) {
                   inputTokensCount = data.usage.prompt_tokens || inputTokensCount;
                   outputTokensCount = data.usage.completion_tokens || outputTokensCount;
@@ -1984,11 +2163,11 @@ Web search is NOT needed for:
             ];
 
             const followupPayload = {
-                model: modelName,
-                messages: toolResponseMessages,
-                tools,
-                stream: true,
-                stream_options: { include_usage: true },
+              model: modelName,
+              messages: toolResponseMessages,
+              tools,
+              stream: true,
+              stream_options: { include_usage: true },
             };
 
             let followupResponse;
@@ -2049,10 +2228,10 @@ Web search is NOT needed for:
                         inputTokensCount = followupData.usage.prompt_tokens || inputTokensCount;
                         outputTokensCount = followupData.usage.completion_tokens || outputTokensCount;
                       }
-                      
-                      const followupContent = followupData.choices && followupData.choices.length > 0 
-                                              ? followupData.choices[0]?.delta?.content || "" 
-                                              : "";
+
+                      const followupContent = followupData.choices && followupData.choices.length > 0
+                        ? followupData.choices[0]?.delta?.content || ""
+                        : "";
                       if (followupContent) {
                         fullText += followupContent;
                         currentMessages = currentMessages.map((msg) =>
@@ -2127,18 +2306,14 @@ Web search is NOT needed for:
           ? "\n\nARTIFACT MODE ENABLED: The user wants you to create a complete, multi-file web project. You MUST use the following format for EVERY code block:\n1. Start EVERY code block with a file header comment like `// file: path/filename.ext` (for HTML use `<!-- file: ... -->`).\n2. Provide the FULL content for each file. Do not use placeholders.\n3. Organize the project into separate files (e.g., index.html, style.css, script.js).\n4. In index.html, link to your other files using relative paths (e.g., <link href=\"style.css\">).\n5. Use modern, premium design with Tailwind CSS (via CDN) or custom CSS.\n6. Output one file per Markdown code block."
           : "";
 
-        const systemInstructionText = `${systemInstructionBaseText}${
-          isThinkingMode
+        const systemInstructionText = `${systemInstructionBaseText}${isThinkingMode
             ? " ALWAYS start your response with a deep thinking process enclosed in <think>...</think> tags. Outline your reasoning, plan, and tone adjustment before providing the final response after the tags."
             : ""
-        }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.${artifactInstruction}\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}\nYou have the tool 'save_to_memory' to store NEW important facts. DO NOT save duplicate facts that are already in your memory list.`;
+          }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.${artifactInstruction}\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}\nYou have the tool 'save_to_memory' to store NEW important facts. DO NOT save duplicate facts that are already in your memory list.`;
 
         const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
         const tools: any[] = [MEMORY_TOOL_DEFINITION];
-        if (isSearchMode) {
-          tools.push({ googleSearch: {} });
-        }
 
         const chatSession = ai.chats.create({
           model: modelName,
@@ -2153,7 +2328,7 @@ Web search is NOT needed for:
 
         const result = await chatSession.sendMessageStream({
           message: [
-            { text: promptText },
+            { text: searchContext + promptText },
             ...multimodalContent.map(m => ({ inlineData: m.inlineData }))
           ]
         });
@@ -2167,7 +2342,7 @@ Web search is NOT needed for:
           if (chunkObj?.candidates?.[0]?.content?.parts) {
             for (const part of chunkObj.candidates[0].content.parts) {
               const isThoughtPart = part.thought === true;
-              
+
               if (isThoughtPart && !isInThought) {
                 // We just started a thought block
                 extracted += "<think>\n";
@@ -2181,7 +2356,7 @@ Web search is NOT needed for:
               if (part.text) {
                 extracted += part.text;
               }
-              
+
               if (part.executableCode) {
                 extracted += `\n\`\`\`python\n${part.executableCode.code}\n\`\`\`\n`;
               }
@@ -2190,14 +2365,14 @@ Web search is NOT needed for:
               }
             }
           } else {
-             try { extracted = chunkObj.text || ''; } catch (e) { extracted = ''; }
+            try { extracted = chunkObj.text || ''; } catch (e) { extracted = ''; }
           }
           return extracted;
         };
 
         for await (const chunk of result) {
           if (isCanceled.current) break;
-          
+
           // Check for function calls
           const functionCalls = (chunk as any).functionCalls;
           if (functionCalls && functionCalls.length > 0) {
@@ -2205,7 +2380,7 @@ Web search is NOT needed for:
               if (fc.name === "save_to_memory") {
                 const fact = (fc.args as any).fact;
                 saveMemory(fact);
-                
+
                 functionCallResults.push({
                   functionResponse: {
                     name: fc.name,
@@ -2277,21 +2452,31 @@ Web search is NOT needed for:
       // Generate a better title on the first message
       if (isFirstMessage && (fullText || promptTextRaw)) {
         const generateSessionTitle = async () => {
+          const cleanTitle = (raw: string) => raw
+            .trim()
+            .replace(/^["']|["']$/g, '')
+            .replace(/^title:\s*/i, '')
+            .replace(/[.!?,;:]+$/g, '')
+            .split(/\s+/)
+            .slice(0, 6)
+            .join(' ')
+            .substring(0, 50)
+            .trim();
+
+          const fallbackTitle = () => {
+            const titleSource = promptTextRaw || (attachedFiles.length > 0
+              ? (safeLanguage === 'en' ? `Sent ${attachedFiles.length} Files` : `Mengirim ${attachedFiles.length} File`)
+              : translations[safeLanguage].sidebar.newSession);
+            return cleanTitle(titleSource.split(/\s+/).slice(0, 4).join(' '));
+          };
+
           try {
             const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
-              
-            if (!effectiveApiKey) {
-              // Fallback: use first few words of user prompt
-              const fallbackTitle = promptTextRaw.split(/\s+/).slice(0, 4).join(' ');
-              if (fallbackTitle) updateSession(session.id, { title: fallbackTitle.substring(0, 30) });
-              return;
-            }
-            const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
-            
+
             const aiSnippet = fullText ? fullText.substring(0, 500) : "(no response yet)";
             const titlePrompt = `Constraints:
 
-Use a maximum of 3–4 words.
+Use a maximum of 3-4 words.
 Use Title Case.
 No punctuation.
 Output ONLY the title string. No quotes, no explanation.
@@ -2318,22 +2503,82 @@ User: ${promptTextRaw.substring(0, 300)}
 AI: ${aiSnippet}
 Title:`;
 
-            const response = await ai.models.generateContent({
-              model: "gemini-2.5-flash",
-              contents: titlePrompt
-            });
-            
-            if (response.text) {
-              let newTitle = response.text.trim().replace(/^["']|["']$/g, '').replace(/[.!?,;:]+$/, '');
-              if (newTitle && newTitle.length > 1 && newTitle.length < 50) {
+            if (endpoint) {
+              const titleMessages = [
+                {
+                  role: "system",
+                  content: "Create short conversation titles. Return only the title text.",
+                },
+                {
+                  role: "user",
+                  content: titlePrompt,
+                },
+              ];
+
+              const titlePayload = {
+                model: modelName,
+                messages: titleMessages,
+                max_tokens: 24,
+                temperature: 0.2,
+              };
+
+              let response: Response;
+              try {
+                response = await fetch(`${endpoint.url}/chat/completions`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${endpoint.key}`,
+                  },
+                  body: JSON.stringify(titlePayload),
+                });
+              } catch (err: any) {
+                const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+                if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+                  response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${endpoint.key}`,
+                      "x-target-url": `${endpoint.url}/chat/completions`,
+                    },
+                    body: JSON.stringify(titlePayload),
+                  });
+                } else {
+                  throw err;
+                }
+              }
+
+              if (response.ok) {
+                const data = await response.json();
+                const newTitle = cleanTitle(data?.choices?.[0]?.message?.content || '');
+                if (newTitle && newTitle.length > 1) {
+                  updateSession(session.id, { title: newTitle });
+                  return;
+                }
+              }
+            }
+
+            if (effectiveApiKey && canUseGeminiForTitle()) {
+              const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
+              const response = await ai.models.generateContent({
+                model: selectedModel,
+                contents: titlePrompt
+              });
+
+              const newTitle = cleanTitle(response.text || '');
+              if (newTitle && newTitle.length > 1) {
                 updateSession(session.id, { title: newTitle });
+                return;
               }
             }
           } catch (e) {
             console.error("Failed to generate session title", e);
-            // Fallback title from user prompt
-            const fallbackTitle = promptTextRaw.split(/\s+/).slice(0, 4).join(' ');
-            if (fallbackTitle) updateSession(session.id, { title: fallbackTitle.substring(0, 30) });
+          }
+
+          const finalTitle = fallbackTitle();
+          if (finalTitle) {
+            updateSession(session.id, { title: finalTitle });
           }
         };
         generateSessionTitle();
@@ -2417,11 +2662,10 @@ Title:`;
 
       {/* Search Status Indicator */}
       {(isSearching || searchStatus) && (
-        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-2xl shadow-xl animate-in slide-in-from-top-4 duration-300 ${
-          isSearching
+        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-2xl shadow-xl animate-in slide-in-from-top-4 duration-300 ${isSearching
             ? 'bg-blue-500/10 border border-blue-500/30'
             : 'bg-green-500/10 border border-green-500/30'
-        }`}>
+          }`}>
           {isSearching ? (
             <>
               <RefreshCw size={14} className="text-blue-500 animate-spin" />
@@ -2480,8 +2724,8 @@ Title:`;
               {safeLanguage === 'en' ? 'How can I assist you today?' : 'Bagaimana saya bisa membantu Anda hari ini?'}
             </h2>
             <p className="font-body text-xs text-on-surface-variant max-w-sm text-center">
-              {safeLanguage === 'en' 
-                ? 'Upload documents, ask questions, or enter a prompt below to start interacting.' 
+              {safeLanguage === 'en'
+                ? 'Upload documents, ask questions, or enter a prompt below to start interacting.'
                 : 'Unggah dokumen, ajukan pertanyaan, atau masukkan perintah di bawah ini untuk mulai berinteraksi.'}
             </p>
           </div>
@@ -2513,11 +2757,10 @@ Title:`;
 
               <div className="flex flex-col gap-1 w-full min-w-0 flex-1">
                 <div
-                  className={`p-4 sm:p-5 md:p-6 shadow-sm relative overflow-hidden w-full min-w-0 ${
-                    msg.sender === "user"
+                  className={`p-4 sm:p-5 md:p-6 shadow-sm relative overflow-hidden w-full min-w-0 ${msg.sender === "user"
                       ? "bg-surface border border-outline rounded-3xl rounded-tr-sm"
                       : "bg-surface-dim border-none rounded-3xl rounded-tl-sm"
-                  }`}
+                    }`}
                 >
                   {/* User message: edit mode */}
                   {msg.sender === "user" && editingMessageId === msg.id ? (
@@ -2545,132 +2788,132 @@ Title:`;
                     </div>
                   ) : (
                     <>
-                  {msg.sender === "bot" && msg.text === "" && (
-                    <div className="flex items-center gap-2 text-primary opacity-60">
-                      <RefreshCw size={14} className="animate-spin" />
-                      <span className="font-label text-xs uppercase tracking-widest font-semibold">
-                        Thinking...
-                      </span>
-                    </div>
-                  )}
-                  {(() => {
-                    const { thinkContent, mainContent, isThinkingStill } = parseText(msg.text);
-                    const projectFiles = parseProjectFiles(mainContent || "");
-                    const isLastBotMessage = msg.id === session.messages[session.messages.length - 1]?.id && msg.sender === "bot";
+                      {msg.sender === "bot" && msg.text === "" && (
+                        <div className="flex items-center gap-2 text-primary opacity-60">
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span className="font-label text-xs uppercase tracking-widest font-semibold">
+                            Thinking...
+                          </span>
+                        </div>
+                      )}
+                      {(() => {
+                        const { thinkContent, mainContent, isThinkingStill } = parseText(msg.text);
+                        const projectFiles = parseProjectFiles(mainContent || "");
+                        const isLastBotMessage = msg.id === session.messages[session.messages.length - 1]?.id && msg.sender === "bot";
 
-                    return (
-                      <div className="flex flex-col gap-2">
-                        {projectFiles.length > 1 && (
-                          <ArtifactProject files={projectFiles} />
-                        )}
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            {msg.attachments.map((file, idx) => (
-                              <div
-                                key={idx}
-                                className="w-48 h-48 rounded-xl overflow-hidden border border-outline bg-surface-dim"
+                        return (
+                          <div className="flex flex-col gap-2">
+                            {projectFiles.length > 1 && (
+                              <ArtifactProject files={projectFiles} />
+                            )}
+                            {msg.attachments && msg.attachments.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {msg.attachments.map((file, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="w-48 h-48 rounded-xl overflow-hidden border border-outline bg-surface-dim"
+                                  >
+                                    {file.type.startsWith("image/") ? (
+                                      <img
+                                        src={
+                                          file.url ||
+                                          `data:${file.type};base64,${file.data}`
+                                        }
+                                        className="w-full h-full object-cover cursor-zoom-in"
+                                        alt="attachment"
+                                        onClick={() =>
+                                          window.open(
+                                            file.url ||
+                                            `data:${file.type};base64,${file.data}`,
+                                            "_blank",
+                                          )
+                                        }
+                                      />
+                                    ) : file.type.startsWith("video/") ? (
+                                      <video
+                                        controls
+                                        className="w-full h-full object-cover"
+                                        src={
+                                          file.url ||
+                                          `data:${file.type};base64,${file.data}`
+                                        }
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full flex flex-col items-center justify-center p-4 gap-2">
+                                        <FileText
+                                          size={32}
+                                          className="text-primary opacity-50"
+                                        />
+                                        <span className="text-[10px] text-center font-mono truncate w-full px-2">
+                                          {file.name}
+                                        </span>
+                                        <a
+                                          href={
+                                            file.url ||
+                                            `data:${file.type};base64,${file.data}`
+                                          }
+                                          download={file.name}
+                                          className="text-[10px] text-primary hover:underline font-bold"
+                                        >
+                                          Download
+                                        </a>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {thinkContent !== null && (
+                              <details
+                                className="mb-4 group/think"
+                                open={isThinkingStill && isGenerating}
                               >
-                                {file.type.startsWith("image/") ? (
-                                  <img
-                                    src={
-                                      file.url ||
-                                      `data:${file.type};base64,${file.data}`
-                                    }
-                                    className="w-full h-full object-cover cursor-zoom-in"
-                                    alt="attachment"
-                                    onClick={() =>
-                                      window.open(
-                                        file.url ||
-                                          `data:${file.type};base64,${file.data}`,
-                                        "_blank",
-                                      )
-                                    }
-                                  />
-                                ) : file.type.startsWith("video/") ? (
-                                  <video
-                                    controls
-                                    className="w-full h-full object-cover"
-                                    src={
-                                      file.url ||
-                                      `data:${file.type};base64,${file.data}`
-                                    }
-                                  />
+                                <summary className="font-label text-[10px] uppercase tracking-[0.15em] font-bold cursor-pointer text-primary/70 hover:text-primary flex items-center gap-2 select-none bg-primary/5 p-2.5 rounded-xl border border-primary/10 transition-all hover:bg-primary/10">
+                                  <Brain size={14} className={isThinkingStill && isGenerating ? "animate-pulse" : ""} />
+                                  <span>{safeLanguage === 'en' ? 'Thinking Process' : 'Proses Berpikir'}</span>
+                                  {isThinkingStill && isGenerating && (
+                                    <RefreshCw size={10} className="animate-spin ml-auto opacity-50" />
+                                  )}
+                                </summary>
+                                <div className="mt-2 p-4 bg-surface-dim rounded-xl text-xs font-mono text-on-surface-variant/90 whitespace-pre-wrap border border-outline/30 shadow-inner max-h-[400px] overflow-y-auto leading-relaxed border-l-2 border-l-primary/40 scrollbar-hide">
+                                  {thinkContent?.trim() ? thinkContent : (isGenerating ? (safeLanguage === 'en' ? "Analyzing query and forming thought process..." : "Menganalisis kueri dan membentuk proses pemikiran...") : (safeLanguage === 'en' ? "Thought process empty." : "Proses pemikiran kosong."))}
+                                </div>
+                              </details>
+                            )}
+                            {(mainContent || !isThinkingStill) && (
+                              <div className="font-body text-sm text-on-surface relative z-10 leading-relaxed markdown-body min-h-[20px] min-w-0 overflow-hidden">
+                                {mainContent ? (
+                                  <Markdown
+                                    remarkPlugins={[remarkMath]}
+                                    rehypePlugins={[rehypeKatex]}
+                                    components={(isGenerating && isLastBotMessage) ? inkBleedMarkdownComponents : baseMarkdownComponents}
+                                  >
+                                    {mainContent}
+                                  </Markdown>
                                 ) : (
-                                  <div className="w-full h-full flex flex-col items-center justify-center p-4 gap-2">
-                                    <FileText
-                                      size={32}
-                                      className="text-primary opacity-50"
-                                    />
-                                    <span className="text-[10px] text-center font-mono truncate w-full px-2">
-                                      {file.name}
-                                    </span>
-                                    <a
-                                      href={
-                                        file.url ||
-                                        `data:${file.type};base64,${file.data}`
-                                      }
-                                      download={file.name}
-                                      className="text-[10px] text-primary hover:underline font-bold"
-                                    >
-                                      Download
-                                    </a>
+                                  isGenerating && !isThinkingStill && isLastBotMessage && (
+                                    <div className="flex items-center gap-2 text-primary/40 italic text-xs">
+                                      <RefreshCw size={12} className="animate-spin" />
+                                      {safeLanguage === 'en' ? 'Constructing response...' : 'Menyusun respons...'}
+                                    </div>
+                                  )
+                                )}
+                                {!isGenerating && !mainContent && !isThinkingStill && thinkContent && (
+                                  <div className="text-xs text-on-surface-variant/60 italic">
+                                    Model finished thinking but produced no final response body.
+                                  </div>
+                                )}
+                                {!isGenerating && isThinkingStill && (
+                                  <div className="text-xs text-error/60 italic flex items-center gap-2">
+                                    <Square size={10} className="fill-current" />
+                                    Generation stopped unexpectedly during thinking process.
                                   </div>
                                 )}
                               </div>
-                            ))}
-                          </div>
-                        )}
-                        {thinkContent !== null && (
-                          <details
-                            className="mb-4 group/think"
-                            open={isThinkingStill && isGenerating}
-                          >
-                            <summary className="font-label text-[10px] uppercase tracking-[0.15em] font-bold cursor-pointer text-primary/70 hover:text-primary flex items-center gap-2 select-none bg-primary/5 p-2.5 rounded-xl border border-primary/10 transition-all hover:bg-primary/10">
-                              <Brain size={14} className={isThinkingStill && isGenerating ? "animate-pulse" : ""} />
-                              <span>{safeLanguage === 'en' ? 'Thinking Process' : 'Proses Berpikir'}</span>
-                              {isThinkingStill && isGenerating && (
-                                <RefreshCw size={10} className="animate-spin ml-auto opacity-50" />
-                              )}
-                            </summary>
-                            <div className="mt-2 p-4 bg-surface-dim rounded-xl text-xs font-mono text-on-surface-variant/90 whitespace-pre-wrap border border-outline/30 shadow-inner max-h-[400px] overflow-y-auto leading-relaxed border-l-2 border-l-primary/40 scrollbar-hide">
-                              {thinkContent?.trim() ? thinkContent : (isGenerating ? (safeLanguage === 'en' ? "Analyzing query and forming thought process..." : "Menganalisis kueri dan membentuk proses pemikiran...") : (safeLanguage === 'en' ? "Thought process empty." : "Proses pemikiran kosong."))}
-                            </div>
-                          </details>
-                        )}
-                        {(mainContent || !isThinkingStill) && (
-                          <div className="font-body text-sm text-on-surface relative z-10 leading-relaxed markdown-body min-h-[20px] min-w-0 overflow-hidden">
-                            {mainContent ? (
-                              <Markdown
-                                remarkPlugins={[remarkMath]}
-                                rehypePlugins={[rehypeKatex]}
-                                components={(isGenerating && isLastBotMessage) ? inkBleedMarkdownComponents : baseMarkdownComponents}
-                              >
-                                {mainContent}
-                              </Markdown>
-                            ) : (
-                              isGenerating && !isThinkingStill && isLastBotMessage && (
-                                <div className="flex items-center gap-2 text-primary/40 italic text-xs">
-                                  <RefreshCw size={12} className="animate-spin" />
-                                  {safeLanguage === 'en' ? 'Constructing response...' : 'Menyusun respons...'}
-                                </div>
-                              )
-                            )}
-                            {!isGenerating && !mainContent && !isThinkingStill && thinkContent && (
-                              <div className="text-xs text-on-surface-variant/60 italic">
-                                Model finished thinking but produced no final response body.
-                              </div>
-                            )}
-                            {!isGenerating && isThinkingStill && (
-                              <div className="text-xs text-error/60 italic flex items-center gap-2">
-                                <Square size={10} className="fill-current" />
-                                Generation stopped unexpectedly during thinking process.
-                              </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })()}
+                        );
+                      })()}
                     </>
                   )}
                 </div>
@@ -2755,9 +2998,8 @@ Title:`;
         <div ref={messagesEndRef} className="h-10 shrink-0" />
       </div>
 
-      <div className={`mobile-bottom-safe fixed bottom-0 w-full min-w-0 px-3 sm:px-4 md:px-8 sm:pb-4 md:pb-8 pt-12 bg-gradient-to-t from-background via-background/95 to-transparent pointer-events-none z-40 transition-all duration-300 ${
-        isSidebarCollapsed ? 'md:left-[72px] md:w-[calc(100%-72px)]' : 'md:left-[280px] md:w-[calc(100%-280px)]'
-      }`}>
+      <div className={`mobile-bottom-safe fixed bottom-0 w-full min-w-0 px-3 sm:px-4 md:px-8 sm:pb-4 md:pb-8 pt-12 bg-gradient-to-t from-background via-background/95 to-transparent pointer-events-none z-40 transition-all duration-300 ${isSidebarCollapsed ? 'md:left-[72px] md:w-[calc(100%-72px)]' : 'md:left-[280px] md:w-[calc(100%-280px)]'
+        }`}>
         <div className="w-full pointer-events-auto relative">
           {/* File Previews */}
           {attachedFiles.length > 0 && (
@@ -2909,15 +3151,24 @@ Title:`;
                 </button>
 
                 <button
-                  onClick={() => setIsSearchMode?.(!isSearchMode)}
-                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 ${
-                    isSearchMode
+                  onClick={() => {
+                    if (!setGenSettings) return;
+                    const nextMode = genSettings.webSearchMode === 'off'
+                      ? 'auto'
+                      : genSettings.webSearchMode === 'auto'
+                        ? 'on'
+                        : 'off';
+                    setGenSettings({ ...genSettings, webSearchMode: nextMode });
+                  }}
+                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 ${genSettings.webSearchMode === 'on'
                       ? "bg-blue-500/10 text-blue-500 shadow-sm ring-1 ring-blue-500/20"
+                      : genSettings.webSearchMode === 'auto'
+                        ? "bg-emerald-500/10 text-emerald-500 shadow-sm ring-1 ring-emerald-500/20"
                       : searchStatus === 'detecting...'
                         ? "bg-yellow-500/10 text-yellow-500 animate-pulse"
                         : "text-on-surface-variant hover:bg-surface-dim hover:text-primary"
-                  }`}
-                  title={searchStatus === 'detecting...' ? 'Auto-detecting search need...' : t.toggleSearch}
+                    }`}
+                  title={searchStatus === 'detecting...' ? 'Auto-detecting search need...' : `Search: ${genSettings.webSearchMode}`}
                 >
                   {searchStatus === 'detecting...' ? (
                     <RefreshCw size={16} className="animate-spin" />
@@ -2940,23 +3191,21 @@ Title:`;
                   for (const msg of session.messages) {
                     liveTokens += msg.tokenCount || countTokens(msg.text || "");
                   }
-                  
+
                   const ratio = liveTokens / contextWindow;
                   const isHigh = ratio > 0.7;
                   const isCritical = ratio > 0.9;
-                  
+
                   return liveTokens > 0 ? (
                     <div className="flex items-center gap-1.5 px-2 py-1 bg-surface-dim/80 rounded-lg border border-outline/30" title="Context Window Usage">
-                      <span className={`text-[9px] font-mono font-semibold tabular-nums ${
-                        isCritical ? 'text-red-500' : isHigh ? 'text-yellow-500' : 'text-on-surface-variant'
-                      }`}>
+                      <span className={`text-[9px] font-mono font-semibold tabular-nums ${isCritical ? 'text-red-500' : isHigh ? 'text-yellow-500' : 'text-on-surface-variant'
+                        }`}>
                         {formatTokenCount(liveTokens)}/{formatTokenCount(contextWindow)}
                       </span>
                       <div className="w-8 h-1.5 bg-surface-dim rounded-full overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            isCritical ? 'bg-red-500' : isHigh ? 'bg-yellow-500' : 'bg-primary'
-                          }`}
+                          className={`h-full rounded-full transition-all duration-300 ${isCritical ? 'bg-red-500' : isHigh ? 'bg-yellow-500' : 'bg-primary'
+                            }`}
                           style={{ width: `${Math.min(ratio * 100, 100)}%` }}
                         />
                       </div>
@@ -2979,7 +3228,7 @@ Title:`;
               ></textarea>
 
               <div className="flex items-center gap-0.5 sm:gap-1 pb-1.5 pr-1 shrink-0">
-                <button 
+                <button
                   onClick={toggleRecording}
                   className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition-all duration-200 ${isRecording ? "bg-red-500 text-white animate-pulse" : "text-on-surface-variant hover:text-primary hover:bg-surface-dim"}`}
                 >

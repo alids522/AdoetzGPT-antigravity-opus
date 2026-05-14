@@ -49,6 +49,10 @@ export interface Endpoint {
 export interface GenerationSettings {
   imageModel: 'gemini' | 'openai';
   videoModel: 'veo';
+  webSearchMode: 'off' | 'auto' | 'on';
+  webSearchProvider: 'gemini' | 'endpoint';
+  webSearchModel: string;
+  webSearchEndpointId: string;
 }
 
 export interface CustomPersonality {
@@ -161,7 +165,11 @@ const DEFAULT_ENDPOINTS: Endpoint[] = [
 
 const DEFAULT_GEN_SETTINGS: GenerationSettings = {
   imageModel: 'gemini',
-  videoModel: 'veo'
+  videoModel: 'veo',
+  webSearchMode: 'auto',
+  webSearchProvider: 'gemini',
+  webSearchModel: 'gemini-flash-lite-latest',
+  webSearchEndpointId: ''
 };
 
 const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -212,6 +220,43 @@ function readLocalJson<T>(key: string, fallback: T): T {
   }
 }
 
+function normalizeGenSettings(settings?: Partial<GenerationSettings>): GenerationSettings {
+  return {
+    ...DEFAULT_GEN_SETTINGS,
+    ...(settings || {}),
+    webSearchMode: settings?.webSearchMode || DEFAULT_GEN_SETTINGS.webSearchMode,
+    webSearchProvider: settings?.webSearchProvider || DEFAULT_GEN_SETTINGS.webSearchProvider,
+    webSearchModel: settings?.webSearchModel || DEFAULT_GEN_SETTINGS.webSearchModel,
+    webSearchEndpointId: settings?.webSearchEndpointId || DEFAULT_GEN_SETTINGS.webSearchEndpointId,
+  };
+}
+
+function safeSetLocalItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error: any) {
+    if (error?.name !== 'QuotaExceededError') {
+      console.warn(`Unable to save ${key}`, error);
+    }
+  }
+}
+
+function compactLegacySessions(sessions: Session[]): Session[] {
+  return sessions.map((session) => ({
+    ...session,
+    messages: session.messages.slice(-25).map((message) => ({
+      ...message,
+      text: message.text.length > 8000
+        ? `${message.text.slice(0, 5200)}\n\n[Earlier saved content compacted]\n\n${message.text.slice(-2800)}`
+        : message.text,
+      attachments: message.attachments?.map((attachment) => ({
+        ...attachment,
+        data: attachment.data.length > 12000 ? '' : attachment.data,
+      })),
+    })),
+  }));
+}
+
 export default function App() {
   migrateLocalAuthStorage();
   const [hasLoadedSharedState, setHasLoadedSharedState] = useState(false);
@@ -232,7 +277,6 @@ export default function App() {
     return localStorage.getItem('selectedModel') || 'gemini-2.5-flash';
   });
   const [isThinkingMode, setIsThinkingMode] = useState(false);
-  const [isSearchMode, setIsSearchMode] = useState(false);
   const [isArtifactMode, setIsArtifactMode] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
     return normalizeUserAccount(readLocalJson('currentUser', null));
@@ -261,7 +305,7 @@ export default function App() {
   });
 
   const [genSettings, setGenSettings] = useState<GenerationSettings>(() => {
-    return readLocalJson('genSettings', DEFAULT_GEN_SETTINGS);
+    return normalizeGenSettings(readLocalJson('genSettings', DEFAULT_GEN_SETTINGS));
   });
 
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => {
@@ -330,7 +374,7 @@ export default function App() {
         setUserName(state.userName || normalizedUser?.displayName || normalizedUser?.username || 'User');
         setGeminiApiKey(state.geminiApiKey || '');
         setEndpoints(state.endpoints?.length ? state.endpoints : DEFAULT_ENDPOINTS);
-        setGenSettings(state.genSettings || DEFAULT_GEN_SETTINGS);
+        setGenSettings(normalizeGenSettings(state.genSettings));
         setVoiceSettings(state.voiceSettings || DEFAULT_VOICE_SETTINGS);
         setSessions(state.sessions?.length ? state.sessions : DEFAULT_SESSIONS);
         setCurrentSessionId(state.currentSessionId || state.sessions?.[0]?.id || '1');
@@ -400,7 +444,7 @@ export default function App() {
               // Apply other remote settings if they're newer
               if (remote.geminiApiKey) setGeminiApiKey(remote.geminiApiKey);
               if (remote.endpoints?.length) setEndpoints(remote.endpoints);
-              if (remote.genSettings) setGenSettings(remote.genSettings);
+              if (remote.genSettings) setGenSettings(normalizeGenSettings(remote.genSettings));
               if (remote.voiceSettings) setVoiceSettings(remote.voiceSettings);
               if (remote.userName) setUserName(remote.userName);
               setLastSyncAt(Date.now());
@@ -528,7 +572,7 @@ export default function App() {
     if (state.userName) setUserName(state.userName);
     if (state.geminiApiKey !== undefined) setGeminiApiKey(state.geminiApiKey);
     if (state.endpoints?.length) setEndpoints(state.endpoints);
-    if (state.genSettings) setGenSettings(state.genSettings);
+    if (state.genSettings) setGenSettings(normalizeGenSettings(state.genSettings));
     if (state.voiceSettings) setVoiceSettings(state.voiceSettings);
     if (state.sessions?.length) setSessions(state.sessions);
     if (state.currentSessionId) setCurrentSessionId(state.currentSessionId);
@@ -766,7 +810,7 @@ export default function App() {
   }, [voiceSettings]);
 
   useEffect(() => {
-    localStorage.setItem('sessions', JSON.stringify(sessions));
+    safeSetLocalItem('sessions', JSON.stringify(compactLegacySessions(sessions)));
   }, [sessions]);
 
   useEffect(() => {
@@ -778,15 +822,15 @@ export default function App() {
   }, [selectedModel]);
 
   useEffect(() => {
-    localStorage.setItem('memories', JSON.stringify(memories));
+    safeSetLocalItem('memories', JSON.stringify(memories));
   }, [memories]);
 
   useEffect(() => {
-    localStorage.setItem('tokenUsageData', JSON.stringify(tokenUsageData));
+    safeSetLocalItem('tokenUsageData', JSON.stringify(tokenUsageData.slice(-500)));
   }, [tokenUsageData]);
 
   useEffect(() => {
-    localStorage.setItem('customCounters', JSON.stringify(customCounters));
+    safeSetLocalItem('customCounters', JSON.stringify(customCounters));
   }, [customCounters]);
 
   // Function to add token usage record
@@ -1011,8 +1055,6 @@ export default function App() {
             selectedModel={selectedModel}
             isThinkingMode={isThinkingMode}
             setIsThinkingMode={setIsThinkingMode}
-            isSearchMode={isSearchMode}
-            setIsSearchMode={setIsSearchMode}
             isArtifactMode={isArtifactMode}
             setIsArtifactMode={setIsArtifactMode}
             session={currentSession}
@@ -1020,6 +1062,7 @@ export default function App() {
             endpoints={endpoints}
             endpointModels={endpointModels}
             genSettings={genSettings}
+            setGenSettings={setGenSettings}
             voiceSettings={voiceSettings}
             geminiApiKey={geminiApiKey}
             language={language}
@@ -1046,6 +1089,7 @@ export default function App() {
             setGeminiApiKey={setGeminiApiKey}
             endpoints={endpoints}
             setEndpoints={setEndpoints}
+            endpointModels={endpointModels}
             geminiModels={geminiModels}
             onFetchModels={fetchModels}
             onSave={handleSaveSettings}
