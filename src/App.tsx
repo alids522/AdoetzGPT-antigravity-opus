@@ -110,6 +110,8 @@ export interface SyncSettings {
   enabled: boolean;
   apiBaseUrl: string;
   database: DatabaseSettings;
+  backupDatabases?: DatabaseSettings[];
+  autoSyncBackups?: boolean;
 }
 
 const DEFAULT_SYNC_SETTINGS: SyncSettings = {
@@ -123,6 +125,8 @@ const DEFAULT_SYNC_SETTINGS: SyncSettings = {
     password: '',
     port: '',
   },
+  backupDatabases: [],
+  autoSyncBackups: false,
 };
 
 function normalizeSyncSettings(settings?: Partial<SyncSettings> | any): SyncSettings {
@@ -134,6 +138,8 @@ function normalizeSyncSettings(settings?: Partial<SyncSettings> | any): SyncSett
       ...(settings?.database || {}),
       schemaName: settings?.database?.schemaName || settings?.schemaName || DEFAULT_SYNC_SETTINGS.database.schemaName,
     },
+    backupDatabases: settings?.backupDatabases || [],
+    autoSyncBackups: settings?.autoSyncBackups || false,
   };
 }
 
@@ -227,6 +233,7 @@ export default function App() {
   });
   const [isThinkingMode, setIsThinkingMode] = useState(false);
   const [isSearchMode, setIsSearchMode] = useState(false);
+  const [isArtifactMode, setIsArtifactMode] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
     return normalizeUserAccount(readLocalJson('currentUser', null));
   });
@@ -866,17 +873,16 @@ export default function App() {
         // Skip if key is placeholder
         if (ep.key === 'sk-...') continue;
 
-        // If endpoint has predefined models, use those
+        // Add any predefined models first
         if (ep.models && ep.models.length > 0) {
           const predefined = ep.models.map(m => ({
             name: m,
             endpointId: ep.id
           }));
           allEndpointModels.push(...predefined);
-          continue;
         }
 
-        // Skip fetching if skipModelFetch is enabled
+        // Skip fetching ONLY if skipModelFetch is explicitly enabled
         if (ep.skipModelFetch) {
           continue;
         }
@@ -916,7 +922,7 @@ export default function App() {
       }
     }
     setEndpointModels(allEndpointModels);
-  }, [endpoints, geminiApiKey]);
+  }, [endpoints, geminiApiKey, syncSettings]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1007,6 +1013,8 @@ export default function App() {
             setIsThinkingMode={setIsThinkingMode}
             isSearchMode={isSearchMode}
             setIsSearchMode={setIsSearchMode}
+            isArtifactMode={isArtifactMode}
+            setIsArtifactMode={setIsArtifactMode}
             session={currentSession}
             updateSession={updateSession}
             endpoints={endpoints}

@@ -315,7 +315,123 @@ export function Settings({
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-outline/50">
+            <div className="mt-8 border-t border-outline/50 pt-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-primary">Backup Databases</h3>
+                  <p className="text-xs text-on-surface-variant">Automatically push your state to additional Postgres databases.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const newBackups = [...(syncSettings.backupDatabases || []), {
+                      databaseUrl: '', database: '', schemaName: 'adoetzgpt', user: '', password: '', port: ''
+                    }];
+                    setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                  }}
+                  className="text-[10px] uppercase tracking-widest font-semibold flex items-center gap-1 text-on-surface-variant hover:text-primary transition-colors"
+                >
+                  <Plus size={12} /> Add Backup
+                </button>
+              </div>
+
+              {syncSettings.backupDatabases && syncSettings.backupDatabases.length > 0 && (
+                <div className="space-y-4 mb-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <input
+                      type="checkbox"
+                      id="autoSyncBackups"
+                      checked={syncSettings.autoSyncBackups || false}
+                      onChange={(e) => setSyncSettings({ ...syncSettings, autoSyncBackups: e.target.checked })}
+                      className="w-4 h-4 rounded text-primary border-outline focus:ring-primary focus:ring-offset-surface bg-surface"
+                    />
+                    <label htmlFor="autoSyncBackups" className="text-sm text-on-surface-variant cursor-pointer">
+                      Automatically sync to all backup databases when saving state
+                    </label>
+                  </div>
+
+                  {syncSettings.backupDatabases.map((backupDb, idx) => (
+                    <div key={idx} className="p-4 border border-outline rounded-xl bg-surface-dim relative">
+                      <button
+                        onClick={() => {
+                          const newBackups = [...syncSettings.backupDatabases!];
+                          newBackups.splice(idx, 1);
+                          setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                        }}
+                        className="absolute top-2 right-2 p-2 text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Backup Database URL</label>
+                          <input
+                            value={backupDb.databaseUrl}
+                            onChange={(e) => {
+                              const newBackups = [...syncSettings.backupDatabases!];
+                              newBackups[idx].databaseUrl = e.target.value;
+                              setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                            }}
+                            className="w-full bg-surface border border-outline rounded-xl p-3 text-sm font-body text-on-surface focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                            placeholder="postgres://..."
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Database Name</label>
+                          <input
+                            value={backupDb.database}
+                            onChange={(e) => {
+                              const newBackups = [...syncSettings.backupDatabases!];
+                              newBackups[idx].database = e.target.value;
+                              setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                            }}
+                            className="w-full bg-surface border border-outline rounded-xl p-3 text-sm font-body text-on-surface"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">User</label>
+                          <input
+                            value={backupDb.user}
+                            onChange={(e) => {
+                              const newBackups = [...syncSettings.backupDatabases!];
+                              newBackups[idx].user = e.target.value;
+                              setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                            }}
+                            className="w-full bg-surface border border-outline rounded-xl p-3 text-sm font-body text-on-surface"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Password</label>
+                          <input
+                            type="password"
+                            value={backupDb.password || ''}
+                            onChange={(e) => {
+                              const newBackups = [...syncSettings.backupDatabases!];
+                              newBackups[idx].password = e.target.value;
+                              setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                            }}
+                            className="w-full bg-surface border border-outline rounded-xl p-3 text-sm font-body text-on-surface"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Schema</label>
+                          <input
+                            value={backupDb.schemaName || 'adoetzgpt'}
+                            onChange={(e) => {
+                              const newBackups = [...syncSettings.backupDatabases!];
+                              newBackups[idx].schemaName = e.target.value;
+                              setSyncSettings({ ...syncSettings, backupDatabases: newBackups });
+                            }}
+                            className="w-full bg-surface border border-outline rounded-xl p-3 text-sm font-body text-on-surface"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-outline/50">
               <div className="space-y-1">
                 <div className={`text-xs ${syncStatus.toLowerCase().includes('success') || syncStatus.toLowerCase().includes('synced') ? 'text-primary' : 'text-on-surface-variant'}`}>
                   {syncStatus || 'Postgres sync stores app data per signed-in user.'}
@@ -433,7 +549,9 @@ export function Settings({
                   />
                   <label htmlFor={`skip-fetch-${ep.id}`} className="text-sm text-on-surface flex items-center gap-2 cursor-pointer">
                     <span>Skip model fetch</span>
-                    <Info size={14} className="text-on-surface-variant" title="Enable this for endpoints that don't support model listing (e.g., NVIDIA, some providers)" />
+                    <span title="Enable this for endpoints that don't support model listing (e.g., NVIDIA, some providers)">
+                      <Info size={14} className="text-on-surface-variant" />
+                    </span>
                   </label>
                 </div>
 

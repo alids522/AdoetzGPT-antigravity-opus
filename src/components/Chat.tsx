@@ -29,6 +29,9 @@ import {
   Pencil,
   Trash2,
   RotateCw,
+  Code,
+  ExternalLink,
+  Archive
 } from "lucide-react";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { GoogleGenAI, Modality, LiveServerMessage, MediaResolution, Type } from "@google/genai";
@@ -40,6 +43,14 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Session, Message, GenerationSettings, VoiceSettings } from "../App";
 import { translations, Language, normalizeLanguage } from "../translations";
 import { startNativeLiveConversationService, stopNativeLiveConversationService } from "../native/liveConversation";
+import { 
+  Share 
+} from "@capacitor/share";
+import { 
+  Filesystem, 
+  Directory 
+} from "@capacitor/filesystem";
+import JSZip from "jszip";
 import { encoding_for_model, get_encoding } from 'tiktoken';
 
 interface ChatProps {
@@ -47,7 +58,9 @@ interface ChatProps {
   isThinkingMode?: boolean;
   setIsThinkingMode?: (val: boolean) => void;
   isSearchMode?: boolean;
-  setIsSearchMode?: (val: boolean) => void;
+  setIsSearchMode?: (mode: boolean) => void;
+  isArtifactMode?: boolean;
+  setIsArtifactMode?: (mode: boolean) => void;
   session: Session;
   updateSession: (
     id: string,
@@ -59,7 +72,7 @@ interface ChatProps {
   voiceSettings: VoiceSettings;
   geminiApiKey?: string;
   language: Language;
-  memories: any[];
+  memories?: { id: string; content: string }[];
   saveMemory: (content: string) => void;
   onTokenUpdate?: (usage: { input: number; output: number; total: number; max: number }) => void;
   isSidebarCollapsed?: boolean;
@@ -313,8 +326,383 @@ const TEXT_PERSONALITY_PROMPTS: Record<string, string> = {
     "You are having a casual text conversation. Use informal language, contractions, and natural-sounding sentence structures. Write like a friend would in a messaging app—relaxed, authentic, and direct.",
 };
 
+interface ProjectFile {
+  name: string;
+  content: string;
+  language: string;
+}
+
+const parseProjectFiles = (text: string): ProjectFile[] => {
+  const files: ProjectFile[] = [];
+  const codeBlockRegex = /```(\w+)?\s*([\s\S]*?)```/g;
+  let match;
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    const language = match[1] || 'text';
+    const content = match[2].trim();
+    
+    // Look at the first line for something like "file: index.html" inside a comment
+    const firstLine = content.split('\n')[0];
+    const fileMatch = firstLine.match(/file:\s*([a-zA-Z0-9_.-]+)/i);
+    
+    if (fileMatch && fileMatch[1]) {
+      const fileName = fileMatch[1];
+      // Remove the first line so the comment doesn't show in the preview/code
+      const cleanContent = content.substring(firstLine.length).trim();
+      
+      files.push({
+        name: fileName,
+        content: cleanContent || content, // Fallback if clean fails
+        language
+      });
+    }
+  }
+
+  return files;
+};
+
+const ProjectPreview = ({ files }: { files: ProjectFile[] }) => {
+  const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isPageListOpen, setIsPageListOpen] = useState(true);
+
+  // Get all HTML pages for the sidebar
+  const htmlPages = useMemo(() => {
+    return files.filter(f => f.name.toLowerCase().endsWith('.html')).sort((a, b) => {
+      // Put index.html first
+      if (a.name.toLowerCase() === 'index.html') return -1;
+      if (b.name.toLowerCase() === 'index.html') return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [files]);
+
+  // Initialize with the index file
+  useEffect(() => {
+    const indexFile = files.find(f => f.name.toLowerCase() === 'index.html') || files.find(f => f.name.toLowerCase().endsWith('.html'));
+    if (indexFile && !currentFileName) {
+      setCurrentFileName(indexFile.name);
+    }
+  }, [files, currentFileName]);
+
+  useEffect(() => {
+    if (!currentFileName) return;
+    const currentFile = files.find(f => f.name === currentFileName);
+    if (!currentFile) return;
+
+    let html = currentFile.content;
+    const blobUrls: string[] = [];
+
+    // Create a map for all files (CSS, JS, and even other HTML)
+    const fileMap: Record<string, string> = {};
+
+    // First, handle non-HTML files as blobs
+    files.forEach(file => {
+      if (file.name.endsWith('.html')) return;
+      const blob = new Blob([file.content], { type: file.name.endsWith('.css') ? 'text/css' : 'text/javascript' });
+      const url = URL.createObjectURL(blob);
+      blobUrls.push(url);
+      fileMap[file.name] = url;
+    });
+
+    // Replace CSS/JS links with blob URLs
+    Object.entries(fileMap).forEach(([name, url]) => {
+      const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(href|src)=["'](?:\\.\\/)?${escapedName}["']`, 'gi');
+      html = html.replace(regex, `$1="${url}"`);
+    });
+
+    // INJECT VIRTUAL ROUTER: Intercept all <a> tags to allow internal navigation
+    const routerScript = `
+      <script>
+        document.addEventListener('click', (e) => {
+          const link = e.target.closest('a');
+          if (link && link.getAttribute('href')) {
+            const href = link.getAttribute('href');
+            // Check if this is a project file
+            const projectFiles = ${JSON.stringify(files.map(f => f.name))};
+            if (projectFiles.includes(href)) {
+              e.preventDefault();
+              window.parent.postMessage({ type: 'navigate', name: href }, '*');
+            }
+          }
+        });
+      </script>
+    `;
+
+    // Add router before </body> or at the end
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${routerScript}</body>`);
+    } else {
+      html += routerScript;
+    }
+
+    const finalBlob = new Blob([html], { type: 'text/html' });
+    const finalUrl = URL.createObjectURL(finalBlob);
+    blobUrls.push(finalUrl);
+    setPreviewUrl(finalUrl);
+
+    return () => {
+      blobUrls.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [files, currentFileName]);
+
+  // Listen for navigation messages from the iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'navigate' && event.data?.name) {
+        setCurrentFileName(event.data.name);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  if (!previewUrl) return <div className="p-8 text-center text-on-surface-variant font-display uppercase tracking-widest text-xs">Loading preview...</div>;
+
+  return (
+    <div className="w-full h-full bg-white relative overflow-hidden rounded-b-xl border-t border-outline/20 flex">
+      {/* Multi-Page Sidebar */}
+      <div className={`${isPageListOpen ? 'w-56' : 'w-0'} transition-all duration-300 ease-in-out bg-[#0A0A0A] border-r border-white/10 flex flex-col overflow-hidden`}>
+        {/* Sidebar Header */}
+        <div className="flex items-center justify-between p-3 border-b border-white/10">
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Pages</span>
+          <span className="text-[9px] text-white/30 font-mono">{htmlPages.length}</span>
+        </div>
+
+        {/* Page List */}
+        <div className="flex-1 overflow-y-auto scrollbar-hide p-2 space-y-1">
+          {htmlPages.map((page) => {
+            const isActive = page.name === currentFileName;
+            return (
+              <button
+                key={page.name}
+                onClick={() => setCurrentFileName(page.name)}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-all group ${
+                  isActive
+                    ? 'bg-primary text-on-primary shadow-[0_0_15px_rgba(var(--primary-rgb),0.3)]'
+                    : 'text-white/40 hover:bg-white/5 hover:text-white/70'
+                }`}
+              >
+                <Globe size={12} className={isActive ? 'animate-pulse' : 'opacity-50 group-hover:opacity-100'} />
+                <span className="text-[10px] font-medium truncate">{page.name}</span>
+                {isActive && (
+                  <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Page Preview Info */}
+        <div className="p-3 border-t border-white/10 bg-[#0A0A0A]/50">
+          <div className="text-[8px] text-white/30 font-mono uppercase tracking-wider">
+            Multi-page Preview
+          </div>
+        </div>
+      </div>
+
+      {/* Preview Area */}
+      <div className="flex-1 relative flex flex-col">
+        {/* Preview Header with Toggle */}
+        <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-gray-200">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-[10px] font-mono text-gray-600">{currentFileName}</span>
+          </div>
+          <button
+            onClick={() => setIsPageListOpen(!isPageListOpen)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-[9px] font-bold uppercase tracking-wider text-gray-600 transition-colors"
+          >
+            <LayoutGrid size={12} />
+            {isPageListOpen ? 'Hide' : 'Pages'}
+          </button>
+        </div>
+
+        {/* Iframe */}
+        <iframe
+          key={currentFileName}
+          src={previewUrl}
+          className="w-full h-full min-h-[550px] border-0"
+          sandbox="allow-scripts allow-forms allow-same-origin"
+          title="Project Preview"
+        />
+      </div>
+    </div>
+  );
+};
+
+const ArtifactProject = ({ files }: { files: ProjectFile[] }) => {
+  const [isZipping, setIsZipping] = useState(false);
+
+  const handleOpenNewTab = () => {
+    const indexFile = files.find(f => f.name.toLowerCase() === 'index.html') || files.find(f => f.name.toLowerCase().endsWith('.html'));
+    if (!indexFile) return;
+
+    // Create blobs for ALL files in the project
+    const fileMap: Record<string, string> = {};
+    const blobUrls: string[] = [];
+    
+    files.forEach(file => {
+      let type = 'text/plain';
+      if (file.name.endsWith('.html')) type = 'text/html';
+      else if (file.name.endsWith('.css')) type = 'text/css';
+      else if (file.name.endsWith('.js')) type = 'text/javascript';
+      
+      const blob = new Blob([file.content], { type });
+      const url = URL.createObjectURL(blob);
+      fileMap[file.name] = url;
+      blobUrls.push(url);
+    });
+
+    // We need to pick one "entry" file and replace all its internal links with the blob URLs
+    // Note: This only works one level deep for the new tab, but it's better than nothing.
+    let html = indexFile.content;
+    Object.entries(fileMap).forEach(([name, url]) => {
+      const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(href|src)=["'](?:\\.\\/)?${escapedName}["']`, 'gi');
+      html = html.replace(regex, `$1="${url}"`);
+    });
+
+    const finalBlob = new Blob([html], { type: 'text/html' });
+    const finalUrl = URL.createObjectURL(finalBlob);
+    
+    // Create a temporary anchor element to trigger the download/open
+    const link = document.createElement('a');
+    link.href = finalUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Note: We don't revoke the URL immediately to give the new tab time to load
+    setTimeout(() => URL.revokeObjectURL(finalUrl), 10000);
+  };
+
+  const handleExport = async () => {
+    const isMultipleFiles = files.length > 1;
+
+    try {
+      setIsZipping(true);
+
+      if (isMultipleFiles) {
+        // Export as ZIP for multiple files
+        const zip = new JSZip();
+        files.forEach(file => {
+          zip.file(file.name, file.content);
+        });
+
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const fileName = `project-${new Date().getTime()}.zip`;
+
+        if (Filesystem && Share) {
+          const reader = new FileReader();
+          reader.readAsDataURL(blob);
+          reader.onloadend = async () => {
+            const base64data = (reader.result as string).split(',')[1];
+            const savedFile = await Filesystem.writeFile({
+              path: fileName,
+              data: base64data,
+              directory: Directory.Cache
+            });
+
+            await Share.share({
+              title: 'Download Project',
+              text: 'Here is your generated project ZIP file.',
+              url: savedFile.uri,
+              dialogTitle: 'Save Project'
+            });
+          };
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        // Export single file directly
+        const file = files[0];
+        const mimeType = file.name.endsWith('.html') ? 'text/html' :
+                        file.name.endsWith('.css') ? 'text/css' :
+                        file.name.endsWith('.js') ? 'text/javascript' :
+                        'text/plain';
+        const blob = new Blob([file.content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.error("Failed to export file(s)", err);
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
+  return (
+    <div className="my-8 rounded-3xl overflow-hidden border border-white/10 bg-[#0A0A0A] shadow-[0_20px_50px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-bottom-8 duration-700">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#141414] border-b border-white/5 relative z-20">
+        {/* Title */}
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Preview</span>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenNewTab}
+            className="flex items-center justify-center w-9 h-9 bg-white/5 text-white/40 rounded-xl hover:bg-white/10 hover:text-white hover:scale-105 active:scale-95 transition-all"
+            title="Launch in New Window"
+          >
+            <ExternalLink size={15} />
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={isZipping}
+            className="flex items-center gap-2 px-5 py-2 bg-white text-black rounded-xl text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-primary hover:text-on-primary active:scale-95 transition-all disabled:opacity-30 shadow-lg"
+            title={files.length > 1 ? `Export ${files.length} files as ZIP` : `Export ${files[0]?.name}`}
+          >
+            {isZipping ? (
+              <RotateCw size={13} className="animate-spin" />
+            ) : files.length > 1 ? (
+              <Archive size={13} />
+            ) : (
+              <Download size={13} />
+            )}
+            <span>
+              {isZipping
+                ? 'Exporting...'
+                : files.length > 1
+                  ? `Export (${files.length})`
+                  : 'Export'}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Content Area - Always Preview */}
+      <div className="h-[650px] bg-white animate-in zoom-in-95 duration-500 overflow-hidden">
+        <ProjectPreview files={files} />
+      </div>
+    </div>
+  );
+};
+
 const CodeBlock = ({ children, className, language }: { children: string, className?: string, language?: string }) => {
   const [copied, setCopied] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const isPreviewable = language === 'html' || language === 'svg';
 
   const handleCopy = async () => {
     try {
@@ -333,38 +721,77 @@ const CodeBlock = ({ children, className, language }: { children: string, classN
           <Terminal size={12} className="text-primary" />
           {language || 'code'}
         </span>
-        <button
-          onClick={handleCopy}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${
-            copied 
-              ? "bg-green-500/10 text-green-500 ring-1 ring-green-500/20" 
-              : "text-gray-400 hover:bg-white/10 hover:text-white"
-          }`}
-        >
-          {copied ? (
-            <>
-              <Check size={12} />
-              <span>Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy size={12} />
-              <span>Copy</span>
-            </>
+        <div className="flex items-center gap-2">
+          {isPreviewable && (
+            <button
+              onClick={() => setIsPreviewOpen(!isPreviewOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${
+                isPreviewOpen 
+                  ? "bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20" 
+                  : "text-gray-400 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              {isPreviewOpen ? (
+                <>
+                  <Code size={12} />
+                  <span>Code</span>
+                </>
+              ) : (
+                <>
+                  <Play size={12} />
+                  <span>Preview</span>
+                </>
+              )}
+            </button>
           )}
-        </button>
+          <button
+            onClick={handleCopy}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all duration-200 text-[10px] font-bold uppercase tracking-wider ${
+              copied 
+                ? "bg-green-500/10 text-green-500 ring-1 ring-green-500/20" 
+                : "text-gray-400 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            {copied ? (
+              <>
+                <Check size={12} />
+                <span>Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy size={12} />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
-      <div className="p-0 overflow-x-auto scrollbar-hide text-xs">
-        <SyntaxHighlighter
-          language={language || 'text'}
-          style={vscDarkPlus}
-          customStyle={{ margin: 0, padding: '1rem', backgroundColor: '#1e1e1e' }}
-          wrapLines={true}
-          wrapLongLines={true}
-        >
-          {children}
-        </SyntaxHighlighter>
-      </div>
+      {isPreviewOpen && isPreviewable ? (
+        <div className="bg-white overflow-auto relative" style={{ minHeight: '300px', maxHeight: '600px' }}>
+          {language === 'svg' ? (
+            <div className="w-full h-full flex items-center justify-center p-4" dangerouslySetInnerHTML={{ __html: children }} />
+          ) : (
+            <iframe 
+              srcDoc={children} 
+              className="w-full h-full min-h-[400px] border-0" 
+              sandbox="allow-scripts allow-forms allow-same-origin"
+              title="Artifact Preview"
+            />
+          )}
+        </div>
+      ) : (
+        <div className="p-0 overflow-x-auto scrollbar-hide text-xs">
+          <SyntaxHighlighter
+            language={language || 'text'}
+            style={vscDarkPlus}
+            customStyle={{ margin: 0, padding: '1rem', backgroundColor: '#1e1e1e' }}
+            wrapLines={true}
+            wrapLongLines={true}
+          >
+            {children}
+          </SyntaxHighlighter>
+        </div>
+      )}
     </div>
   );
 };
@@ -463,6 +890,8 @@ export function Chat({
   setIsThinkingMode,
   isSearchMode,
   setIsSearchMode,
+  isArtifactMode,
+  setIsArtifactMode,
   session,
   updateSession,
   endpoints,
@@ -510,6 +939,11 @@ export function Chat({
   // State for editing user messages
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+
+  // State for search and memory indicators
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
+  const [memoryUpdates, setMemoryUpdates] = useState<string[]>([]);
 
   // Token usage tracking
   const [tokenUsage, setTokenUsage] = useState({ input: 0, output: 0, total: 0 });
@@ -1094,6 +1528,48 @@ export function Chat({
   const handleStop = () => {
     isCanceled.current = true;
     setIsGenerating(false);
+    setIsSearching(false);
+  };
+
+  // Auto-detect if web search is needed for the query
+  const detectSearchNeed = async (query: string): Promise<boolean> => {
+    const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+    if (!effectiveApiKey) return false;
+
+    try {
+      const detectionAi = new GoogleGenAI({ apiKey: effectiveApiKey });
+      const result = await detectionAi.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Analyze this user query and determine if it requires web search to provide accurate, up-to-date information.
+
+Query: "${query}"
+
+Respond with ONLY "true" if web search is needed, or "false" if not.
+
+Web search is needed for:
+- Current events, news, recent developments
+- Latest statistics, prices, stock prices
+- Recent product releases or updates
+- Time-sensitive information
+- Facts that may have changed recently
+- "What's happening", "latest", "recent", "current" queries
+
+Web search is NOT needed for:
+- General knowledge, definitions, explanations
+- Creative writing, brainstorming
+- Coding help, programming concepts
+- Math problems, calculations
+- Personal advice, opinions
+- Historical facts
+- How-to instructions`,
+      });
+
+      const response = result.text?.trim().toLowerCase();
+      return response === 'true' || response === 'yes' || response.includes('true');
+    } catch (err) {
+      console.warn('Auto-detect search failed:', err);
+      return false;
+    }
   };
 
   const handleSend = async () => {
@@ -1213,10 +1689,21 @@ export function Chat({
           memoryPrompt = `\n\n=== IMPORTANT - USER CONTEXT YOU MUST REMEMBER ===\nThe following information contains important facts about the user that you should remember and use throughout the conversation:\n${memoryList}\n\nUse this information to provide personalized responses. When relevant, reference these facts naturally in your answers.\n=== END OF USER CONTEXT ===\n\n`;
         }
 
-        // If search mode is on, use Gemini to get web search results first
+        // Auto-detect or use manual search mode
         let searchContext = "";
-        if (isSearchMode) {
+        let shouldSearch = isSearchMode;
+
+        // Auto-detect if search is needed (only when not manually disabled)
+        if (!isSearchMode) {
+          setSearchStatus('detecting...');
+          shouldSearch = await detectSearchNeed(promptTextRaw);
+          setSearchStatus(null);
+        }
+
+        if (shouldSearch) {
           try {
+            setIsSearching(true);
+            setSearchStatus('Searching the web...');
             const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
             if (effectiveApiKey) {
               const searchAi = new GoogleGenAI({ apiKey: effectiveApiKey });
@@ -1227,12 +1714,40 @@ export function Chat({
                   tools: [{ googleSearch: {} }],
                 }
               });
+
               if (searchResult.text) {
-                searchContext = `\n\n[Web Search Results]\n${searchResult.text}\n[End of Search Results]\n\nUsing the search results above as context, please answer the following question:\n`;
+                let sourcesText = "";
+                let sourceCount = 0;
+                try {
+                  const groundingMetadata = (searchResult as any)?.candidates?.[0]?.groundingMetadata;
+                  if (groundingMetadata?.groundingChunks) {
+                    const chunks = groundingMetadata.groundingChunks;
+                    const validSources = chunks
+                      .map((c: any, i: number) => c.web?.uri && c.web?.title ? `[${i + 1}] [${c.web.title}](${c.web.uri})` : null)
+                      .filter(Boolean);
+
+                    sourceCount = chunks.length;
+                    if (validSources.length > 0) {
+                      sourcesText = "\n\nSources:\n" + validSources.join('\n');
+                    }
+                  }
+                } catch (e) {
+                  console.warn("Failed to parse search sources", e);
+                }
+
+                searchContext = `\n\n[Web Search Results]\n${searchResult.text}${sourcesText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite the sources provided using standard markdown links:\n`;
+
+                // Add search completed indicator
+                setSearchStatus(`Found ${sourceCount} source${sourceCount !== 1 ? 's' : ''}`);
+                setTimeout(() => setSearchStatus(null), 3000);
               }
             }
           } catch (searchErr) {
             console.warn("Web search failed, proceeding without search context:", searchErr);
+            setSearchStatus('Search failed');
+            setTimeout(() => setSearchStatus(null), 2000);
+          } finally {
+            setIsSearching(false);
           }
         }
 
@@ -1241,12 +1756,16 @@ export function Chat({
 
         // Build messages array with system instruction AND memory-enhanced user message
         const memoryToolInstruction = memories.length > 0
-          ? "\n\nYou have access to a 'save_to_memory' tool. Use this tool when the user shares important personal information, facts, or preferences that should be remembered for future conversations. Examples: name, occupation, interests, goals, important dates, etc."
+          ? "\n\nYou have access to a 'save_to_memory' tool. Use this tool ONLY to store NEW, important personal facts that are NOT ALREADY present in your current memory list. DO NOT use this tool if the fact is already stored or is a minor detail."
           : "\n\nYou have access to a 'save_to_memory' tool. Use this tool when the user shares important personal information, facts, or preferences that should be remembered for future conversations.";
+
+        const artifactInstruction = isArtifactMode
+          ? "\n\nARTIFACT MODE ENABLED: The user wants you to create a complete, multi-file web project. You MUST use the following format for EVERY code block:\n1. Start EVERY code block with a file header comment like `// file: path/filename.ext` (for HTML use `<!-- file: ... -->`).\n2. Provide the FULL content for each file. Do not use placeholders.\n3. Organize the project into separate files (e.g., index.html, style.css, script.js).\n4. In index.html, link to your other files using relative paths (e.g., <link href=\"style.css\">).\n5. Use modern, premium design with Tailwind CSS (via CDN) or custom CSS.\n6. Output one file per Markdown code block."
+          : "";
 
         const systemMessage = {
           role: "system" as const,
-          content: `You are a helpful AI assistant. Pay attention to any user context or memories shared in the conversation.${memoryToolInstruction}`
+          content: `You are a helpful AI assistant. Pay attention to any user context or memories shared in the conversation.${memoryToolInstruction}${artifactInstruction}`
         };
 
         const messages = [
@@ -1411,6 +1930,13 @@ export function Chat({
                       if (args.fact) {
                         console.log('[Memory Debug] Saving memory:', args.fact);
                         saveMemory(args.fact);
+
+                        // Add memory update indicator
+                        const newMemory = args.fact.length > 60 ? args.fact.substring(0, 60) + '...' : args.fact;
+                        setMemoryUpdates(prev => [newMemory, ...prev]);
+                        setTimeout(() => {
+                          setMemoryUpdates(prev => prev.slice(1));
+                        }, 5000);
 
                         // Store the tool call info for follow-up request after stream ends
                         pendingToolResponse = {
@@ -1597,11 +2123,15 @@ export function Chat({
           return TEXT_PERSONALITY_PROMPTS[voiceSettings.textPersonality] || TEXT_PERSONALITY_PROMPTS.Assistant;
         })();
 
+        const artifactInstruction = isArtifactMode
+          ? "\n\nARTIFACT MODE ENABLED: The user wants you to create a complete, multi-file web project. You MUST use the following format for EVERY code block:\n1. Start EVERY code block with a file header comment like `// file: path/filename.ext` (for HTML use `<!-- file: ... -->`).\n2. Provide the FULL content for each file. Do not use placeholders.\n3. Organize the project into separate files (e.g., index.html, style.css, script.js).\n4. In index.html, link to your other files using relative paths (e.g., <link href=\"style.css\">).\n5. Use modern, premium design with Tailwind CSS (via CDN) or custom CSS.\n6. Output one file per Markdown code block."
+          : "";
+
         const systemInstructionText = `${systemInstructionBaseText}${
           isThinkingMode
             ? " ALWAYS start your response with a deep thinking process enclosed in <think>...</think> tags. Outline your reasoning, plan, and tone adjustment before providing the final response after the tags."
             : ""
-        }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol. Ensure that you do not wait to complete full sentences before sending chunks. Your goal is to provide a steady stream of tokens to minimize 'bursty' behavior.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}\nYou have the tool 'save_to_memory' to store new important facts. Use it when you encounter something the user wants you to remember or something fundamentally important about the user.`;
+        }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.${artifactInstruction}\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}\nYou have the tool 'save_to_memory' to store NEW important facts. DO NOT save duplicate facts that are already in your memory list.`;
 
         const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
@@ -1885,6 +2415,59 @@ Title:`;
         </div>
       )}
 
+      {/* Search Status Indicator */}
+      {(isSearching || searchStatus) && (
+        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-2xl shadow-xl animate-in slide-in-from-top-4 duration-300 ${
+          isSearching
+            ? 'bg-blue-500/10 border border-blue-500/30'
+            : 'bg-green-500/10 border border-green-500/30'
+        }`}>
+          {isSearching ? (
+            <>
+              <RefreshCw size={14} className="text-blue-500 animate-spin" />
+              <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">
+                {searchStatus || 'Searching...'}
+              </span>
+            </>
+          ) : (
+            <>
+              <Globe size={14} className="text-green-500" />
+              <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest">
+                {searchStatus}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Memory Update Indicator */}
+      {memoryUpdates.length > 0 && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2 animate-in slide-in-from-top-4 duration-300">
+          {memoryUpdates.map((update, idx) => (
+            <div
+              key={idx}
+              className="flex items-center gap-3 bg-purple-500/10 border border-purple-500/30 px-4 py-2.5 rounded-2xl shadow-xl max-w-md"
+            >
+              <BrainCircuit size={14} className="text-purple-500 animate-pulse" />
+              <div className="flex flex-col">
+                <span className="text-[10px] font-bold text-purple-500 uppercase tracking-widest">
+                  Memory Updated
+                </span>
+                <span className="text-[9px] text-on-surface-variant truncate max-w-[200px]">
+                  {update}
+                </span>
+              </div>
+              <button
+                onClick={() => setMemoryUpdates(prev => prev.filter((_, i) => i !== idx))}
+                className="ml-1 w-6 h-6 rounded-full bg-purple-500/20 text-purple-500 flex items-center justify-center hover:bg-purple-500/30 transition-all"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         ref={chatContainerRef}
         onScroll={handleScroll}
@@ -1972,10 +2555,14 @@ Title:`;
                   )}
                   {(() => {
                     const { thinkContent, mainContent, isThinkingStill } = parseText(msg.text);
+                    const projectFiles = parseProjectFiles(mainContent || "");
                     const isLastBotMessage = msg.id === session.messages[session.messages.length - 1]?.id && msg.sender === "bot";
 
                     return (
                       <div className="flex flex-col gap-2">
+                        {projectFiles.length > 1 && (
+                          <ArtifactProject files={projectFiles} />
+                        )}
                         {msg.attachments && msg.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-2 mb-3">
                             {msg.attachments.map((file, idx) => (
@@ -2323,40 +2910,59 @@ Title:`;
 
                 <button
                   onClick={() => setIsSearchMode?.(!isSearchMode)}
-                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 ${isSearchMode ? "bg-blue-500/10 text-blue-500 shadow-sm ring-1 ring-blue-500/20" : "text-on-surface-variant hover:bg-surface-dim hover:text-primary"}`}
-                  title={t.toggleSearch}
+                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 ${
+                    isSearchMode
+                      ? "bg-blue-500/10 text-blue-500 shadow-sm ring-1 ring-blue-500/20"
+                      : searchStatus === 'detecting...'
+                        ? "bg-yellow-500/10 text-yellow-500 animate-pulse"
+                        : "text-on-surface-variant hover:bg-surface-dim hover:text-primary"
+                  }`}
+                  title={searchStatus === 'detecting...' ? 'Auto-detecting search need...' : t.toggleSearch}
                 >
-                  <Globe size={16} />
+                  {searchStatus === 'detecting...' ? (
+                    <RefreshCw size={16} className="animate-spin" />
+                  ) : (
+                    <Globe size={16} />
+                  )}
                 </button>
 
-                {/* Token Usage Display */}
-                {tokenUsage.total > 0 && (
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-surface-dim/80 rounded-lg border border-outline/30">
-                    <span className={`text-[9px] font-mono font-semibold tabular-nums ${
-                      (tokenUsage.total / contextWindow) > 0.9
-                        ? 'text-red-500'
-                        : (tokenUsage.total / contextWindow) > 0.7
-                        ? 'text-yellow-500'
-                        : 'text-on-surface-variant'
-                    }`}>
-                      {formatTokenCount(tokenUsage.total)}/{formatTokenCount(contextWindow)}
-                    </span>
-                    <div className="w-8 h-1.5 bg-surface-dim rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-300 ${
-                          (tokenUsage.total / contextWindow) > 0.9
-                            ? 'bg-red-500'
-                            : (tokenUsage.total / contextWindow) > 0.7
-                            ? 'bg-yellow-500'
-                            : 'bg-primary'
-                        }`}
-                        style={{
-                          width: `${Math.min((tokenUsage.total / contextWindow) * 100, 100)}%`
-                        }}
-                      />
+                <button
+                  onClick={() => setIsArtifactMode?.(!isArtifactMode)}
+                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 ${isArtifactMode ? "bg-purple-500/10 text-purple-500 shadow-sm ring-1 ring-purple-500/20" : "text-on-surface-variant hover:bg-surface-dim hover:text-primary"}`}
+                  title="Artifact Mode (Generate Web Apps)"
+                >
+                  <LayoutGrid size={16} />
+                </button>
+
+                {/* Live Context Window Monitor */}
+                {(() => {
+                  let liveTokens = countTokens(inputText);
+                  for (const msg of session.messages) {
+                    liveTokens += msg.tokenCount || countTokens(msg.text || "");
+                  }
+                  
+                  const ratio = liveTokens / contextWindow;
+                  const isHigh = ratio > 0.7;
+                  const isCritical = ratio > 0.9;
+                  
+                  return liveTokens > 0 ? (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-surface-dim/80 rounded-lg border border-outline/30" title="Context Window Usage">
+                      <span className={`text-[9px] font-mono font-semibold tabular-nums ${
+                        isCritical ? 'text-red-500' : isHigh ? 'text-yellow-500' : 'text-on-surface-variant'
+                      }`}>
+                        {formatTokenCount(liveTokens)}/{formatTokenCount(contextWindow)}
+                      </span>
+                      <div className="w-8 h-1.5 bg-surface-dim rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            isCritical ? 'bg-red-500' : isHigh ? 'bg-yellow-500' : 'bg-primary'
+                          }`}
+                          style={{ width: `${Math.min(ratio * 100, 100)}%` }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  ) : null;
+                })()}
               </div>
             </div>
 

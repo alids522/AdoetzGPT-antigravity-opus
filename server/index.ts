@@ -30,7 +30,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.header('origin') || '*');
   res.header('Vary', 'Origin');
-  res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AdoetzGPT-Schema');
+  res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AdoetzGPT-Schema, x-target-url');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();

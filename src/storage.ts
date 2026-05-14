@@ -143,26 +143,50 @@ export async function pushRemoteState(state: PersistedAppState): Promise<void> {
     },
   };
 
-  if (shouldUseNativePostgres(state.syncSettings.apiBaseUrl)) {
-    await NativePostgresSync.pushState({
-      token: state.authToken,
-      dbConfig: databasePayload(state.syncSettings),
-      state: remoteState,
+  const syncToDb = async (dbConfigPayload: any) => {
+    if (shouldUseNativePostgres(state.syncSettings.apiBaseUrl)) {
+      await NativePostgresSync.pushState({
+        token: state.authToken,
+        dbConfig: dbConfigPayload,
+        state: remoteState,
+      });
+      return;
+    }
+
+    const response = await fetch(apiUrl(state.syncSettings, '/api/sync/state'), {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${state.authToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ state: remoteState, dbConfig: dbConfigPayload }),
     });
-    return;
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to sync state.');
+  };
+
+  // 1. Sync to primary database
+  await syncToDb(databasePayload(state.syncSettings));
+
+  // 2. Sync to backup databases
+  if (state.syncSettings.autoSyncBackups && state.syncSettings.backupDatabases) {
+    for (const backupDb of state.syncSettings.backupDatabases) {
+      if (!backupDb.databaseUrl || !backupDb.database) continue;
+      try {
+        await syncToDb({
+          databaseUrl: backupDb.databaseUrl.trim(),
+          database: backupDb.database.trim(),
+          schemaName: backupDb.schemaName?.trim() || 'adoetzgpt',
+          user: backupDb.user.trim(),
+          password: backupDb.password || '',
+          port: backupDb.port?.trim() || '',
+        });
+      } catch (err) {
+        console.warn('Failed to sync to backup database', backupDb.databaseUrl, err);
+      }
+    }
   }
-
-  const response = await fetch(apiUrl(state.syncSettings, '/api/sync/state'), {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${state.authToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ state: remoteState, dbConfig: databasePayload(state.syncSettings) }),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Unable to sync state.');
 }
 
 export async function pullRemoteState(authToken: string, syncSettings: SyncSettings): Promise<PersistedAppState | null> {
