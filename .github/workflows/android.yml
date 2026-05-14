@@ -1,0 +1,66 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Copy web assets to Android
+        run: npx cap copy android
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK exists
+        run: |
+          APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK build FAILED - no APK file found!"
+            exit 1
+          fi
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
+          echo "✅ APK built successfully!"
+          echo "📦 Path: $APK_PATH"
+          echo "📏 Size: $APK_SIZE"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdoetzGPT-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30

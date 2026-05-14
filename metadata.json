@@ -1,0 +1,9 @@
+{
+  "name": "Remix: Adoetz Chat streaming design",
+  "description": "A sophisticated AI companion with personality-driven voice and text interactions, advanced reasoning, and custom API integration.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
