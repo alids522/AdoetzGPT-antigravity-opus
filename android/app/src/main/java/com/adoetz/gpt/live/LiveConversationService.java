@@ -81,28 +81,50 @@ public class LiveConversationService extends Service {
         executor.execute(() -> {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 ACTIVE.set(false);
+                releaseWakeLock();
                 return;
             }
 
             int sampleRate = 24000;
-            int bufferSize = Math.max(
-                    AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT),
-                    sampleRate
-            );
+            int minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            if (minBufferSize <= 0) {
+                ACTIVE.set(false);
+                releaseWakeLock();
+                return;
+            }
 
-            audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-            );
+            int bufferSize = Math.max(minBufferSize, sampleRate);
 
-            short[] buffer = new short[bufferSize / 2];
-            audioRecord.startRecording();
+            try {
+                audioRecord = new AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize
+                );
 
-            while (ACTIVE.get() && !Thread.currentThread().isInterrupted()) {
-                audioRecord.read(buffer, 0, buffer.length);
+                if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                    ACTIVE.set(false);
+                    releaseAudioRecord();
+                    releaseWakeLock();
+                    return;
+                }
+
+                short[] buffer = new short[bufferSize / 2];
+                audioRecord.startRecording();
+
+                while (ACTIVE.get() && !Thread.currentThread().isInterrupted()) {
+                    int read = audioRecord.read(buffer, 0, buffer.length);
+                    if (read < 0) {
+                        ACTIVE.set(false);
+                        break;
+                    }
+                }
+            } catch (IllegalStateException | SecurityException e) {
+                ACTIVE.set(false);
+                releaseAudioRecord();
+                releaseWakeLock();
             }
         });
     }
@@ -110,6 +132,11 @@ public class LiveConversationService extends Service {
     private void stopLiveConversation() {
         ACTIVE.set(false);
 
+        releaseAudioRecord();
+        releaseWakeLock();
+    }
+
+    private synchronized void releaseAudioRecord() {
         if (audioRecord != null) {
             try {
                 audioRecord.stop();
@@ -118,7 +145,9 @@ public class LiveConversationService extends Service {
             audioRecord.release();
             audioRecord = null;
         }
+    }
 
+    private void releaseWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
             wakeLock = null;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Trash2, RotateCw, Plus, X, Calendar, TrendingUp, ChevronDown, Filter, MoreHorizontal, Edit2, Check } from 'lucide-react';
+import { BarChart as RechartsBarChart, Bar, LineChart as RechartsLineChart, Line, PieChart as RechartsPieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Trash2, RotateCw, Plus, X, Calendar, TrendingUp, ChevronDown, Filter, MoreHorizontal, Edit2, Check, BarChart3, LineChart as LineChartIcon, PieChart as PieChartIcon } from 'lucide-react';
 import { translations, Language, normalizeLanguage } from '../translations';
 
 interface TokenUsageData {
@@ -317,13 +317,13 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
       case 'pie':
         return (
           <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
+            <RechartsPieChart>
               <Pie
                 data={groupedData}
                 cx="50%"
                 cy="50%"
                 labelLine={false}
-                label={(entry) => `${entry.name}: ${entry.total.toLocaleString()}`}
+                label={(entry: any) => `${entry.name}: ${entry.total.toLocaleString()}`}
                 outerRadius={80}
                 fill="#8884d8"
                 dataKey="total"
@@ -333,7 +333,7 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
                 ))}
               </Pie>
               <Tooltip />
-            </PieChart>
+            </RechartsPieChart>
           </ResponsiveContainer>
         );
 
@@ -344,7 +344,7 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
 
         return (
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={selectedModel === 'all' && selectedEndpoint === 'all' ? perDayByModelData : perDayData}>
+            <RechartsLineChart data={selectedModel === 'all' && selectedEndpoint === 'all' ? perDayByModelData : perDayData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--color-outline)" />
               <XAxis dataKey="date" stroke="var(--color-on-surface-variant)" />
               <YAxis stroke="var(--color-on-surface-variant)" />
@@ -370,14 +370,14 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
               ) : (
                 <Line type="monotone" dataKey="tokens" stroke="var(--color-primary)" strokeWidth={2} />
               )}
-            </LineChart>
+            </RechartsLineChart>
           </ResponsiveContainer>
         );
 
       default:
         return (
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={groupedData}>
+            <RechartsBarChart data={groupedData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--color-outline)" />
               <XAxis dataKey="name" stroke="var(--color-on-surface-variant)" />
               <YAxis stroke="var(--color-on-surface-variant)" />
@@ -391,7 +391,7 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
               <Legend />
               <Bar dataKey="input" name="Input" fill={COLORS[0]} />
               <Bar dataKey="output" name="Output" fill={COLORS[1]} />
-            </BarChart>
+            </RechartsBarChart>
           </ResponsiveContainer>
         );
     }
@@ -487,21 +487,21 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
             className={`p-1.5 transition-all ${chartType === 'bar' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:bg-surface'}`}
             title="Bar Chart"
           >
-            <BarChart size={16} />
+            <BarChart3 size={16} />
           </button>
           <button
             onClick={() => setChartType('line')}
             className={`p-1.5 transition-all ${chartType === 'line' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:bg-surface'}`}
             title="Line Chart"
           >
-            <LineChart size={16} />
+            <LineChartIcon size={16} />
           </button>
           <button
             onClick={() => setChartType('pie')}
             className={`p-1.5 transition-all ${chartType === 'pie' ? 'bg-primary/20 text-primary' : 'text-on-surface-variant hover:bg-surface'}`}
             title="Pie Chart"
           >
-            <PieChart size={16} />
+            <PieChartIcon size={16} />
           </button>
         </div>
       </div>
@@ -819,4 +819,3 @@ export function TokenUsage({ language, usageData, onResetUsage, customCounters, 
     </div>
   );
 }
-

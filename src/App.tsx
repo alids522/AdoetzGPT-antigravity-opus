@@ -50,9 +50,12 @@ export interface GenerationSettings {
   imageModel: 'gemini' | 'openai';
   videoModel: 'veo';
   webSearchMode: 'off' | 'auto' | 'on';
+  webSearchEngine: 'gemini' | 'endpoint' | 'google-custom' | 'duckduckgo';
   webSearchProvider: 'gemini' | 'endpoint';
   webSearchModel: string;
   webSearchEndpointId: string;
+  googleSearchApiKey: string;
+  googleSearchCx: string;
 }
 
 export interface CustomPersonality {
@@ -167,9 +170,12 @@ const DEFAULT_GEN_SETTINGS: GenerationSettings = {
   imageModel: 'gemini',
   videoModel: 'veo',
   webSearchMode: 'auto',
+  webSearchEngine: 'gemini',
   webSearchProvider: 'gemini',
   webSearchModel: 'gemini-flash-lite-latest',
-  webSearchEndpointId: ''
+  webSearchEndpointId: '',
+  googleSearchApiKey: '',
+  googleSearchCx: '',
 };
 
 const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
@@ -221,13 +227,17 @@ function readLocalJson<T>(key: string, fallback: T): T {
 }
 
 function normalizeGenSettings(settings?: Partial<GenerationSettings>): GenerationSettings {
+  const webSearchEngine = settings?.webSearchEngine || (settings?.webSearchProvider === 'endpoint' ? 'endpoint' : DEFAULT_GEN_SETTINGS.webSearchEngine);
   return {
     ...DEFAULT_GEN_SETTINGS,
     ...(settings || {}),
+    webSearchEngine,
     webSearchMode: settings?.webSearchMode || DEFAULT_GEN_SETTINGS.webSearchMode,
-    webSearchProvider: settings?.webSearchProvider || DEFAULT_GEN_SETTINGS.webSearchProvider,
+    webSearchProvider: webSearchEngine === 'endpoint' ? 'endpoint' : 'gemini',
     webSearchModel: settings?.webSearchModel || DEFAULT_GEN_SETTINGS.webSearchModel,
     webSearchEndpointId: settings?.webSearchEndpointId || DEFAULT_GEN_SETTINGS.webSearchEndpointId,
+    googleSearchApiKey: settings?.googleSearchApiKey || DEFAULT_GEN_SETTINGS.googleSearchApiKey,
+    googleSearchCx: settings?.googleSearchCx || DEFAULT_GEN_SETTINGS.googleSearchCx,
   };
 }
 
@@ -244,14 +254,15 @@ function safeSetLocalItem(key: string, value: string) {
 function compactLegacySessions(sessions: Session[]): Session[] {
   return sessions.map((session) => ({
     ...session,
-    messages: session.messages.slice(-25).map((message) => ({
+    messages: session.messages.map((message) => ({
       ...message,
       text: message.text.length > 8000
         ? `${message.text.slice(0, 5200)}\n\n[Earlier saved content compacted]\n\n${message.text.slice(-2800)}`
         : message.text,
       attachments: message.attachments?.map((attachment) => ({
         ...attachment,
-        data: attachment.data.length > 12000 ? '' : attachment.data,
+        data: attachment.data.length > 2_000_000 ? '' : attachment.data,
+        url: undefined,
       })),
     })),
   }));
@@ -332,6 +343,25 @@ export default function App() {
     return readLocalJson('memories', []);
   });
 
+  const normalizeMemoryContent = (content: string) => {
+    return content.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+  };
+
+  const extractRememberedName = (content: string) => {
+    const normalized = normalizeMemoryContent(content);
+    const match = normalized.match(/\b(?:user is named|users name is|user name is|my name is|i am|im|i'm)\s+([\p{L}\p{N}_-]{2,})\b/u);
+    return match?.[1] || null;
+  };
+
+  const isDuplicateMemory = (existing: Memory[], content: string) => {
+    const normalized = normalizeMemoryContent(content);
+    const rememberedName = extractRememberedName(content);
+    return existing.some(memory => {
+      if (normalizeMemoryContent(memory.content) === normalized) return true;
+      return Boolean(rememberedName && extractRememberedName(memory.content) === rememberedName);
+    });
+  };
+
   const saveMemory = (content: string) => {
     const newMemory: Memory = {
       id: Date.now().toString(),
@@ -339,7 +369,7 @@ export default function App() {
       timestamp: Date.now()
     };
     setMemories(prev => {
-      if (prev.some(m => m.content.toLowerCase().trim() === content.toLowerCase().trim())) {
+      if (isDuplicateMemory(prev, content)) {
         return prev;
       }
       return [newMemory, ...prev];

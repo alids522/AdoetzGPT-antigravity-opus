@@ -283,6 +283,155 @@ function parseText(text: string) {
   return { thinkContent: null, mainContent: text, isThinkingStill: false };
 }
 
+type ContextRole = "user" | "assistant";
+
+interface ContextMessage {
+  role: ContextRole;
+  content: string;
+}
+
+function trimToTokenBudget(text: string, tokenBudget: number): string {
+  if (tokenBudget <= 0 || countTokens(text) <= tokenBudget) return text;
+
+  const charBudget = Math.max(400, tokenBudget * 4);
+  const head = Math.floor(charBudget * 0.6);
+  const tail = Math.floor(charBudget * 0.3);
+  return `${text.slice(0, head)}\n\n[Older context compacted to fit the model window]\n\n${text.slice(-tail)}`;
+}
+
+function messageTextForContext(message: Message): string {
+  const { mainContent } = parseText(message.text || "");
+  const text = (mainContent || message.text || "").trim();
+  const attachmentNotes = (message.attachments || [])
+    .map((attachment) => `[Attachment: ${attachment.name} (${attachment.type})]`)
+    .join("\n");
+
+  return [text, attachmentNotes].filter(Boolean).join("\n").trim();
+}
+
+function buildContextMessages(messages: Message[], tokenBudget: number): { olderContext: string; recentMessages: ContextMessage[] } {
+  const cleanMessages = messages
+    .map((message) => ({
+      role: message.sender === "user" ? "user" as const : "assistant" as const,
+      content: messageTextForContext(message),
+    }))
+    .filter((message) => message.content.trim().length > 0);
+
+  const totalTokens = cleanMessages.reduce((sum, message) => sum + countTokens(message.content) + 8, 0);
+  if (totalTokens <= tokenBudget) {
+    return { olderContext: "", recentMessages: cleanMessages };
+  }
+
+  const olderBudget = Math.max(1200, Math.floor(tokenBudget * 0.25));
+  const recentBudget = Math.max(1200, tokenBudget - olderBudget);
+  const recentMessages: ContextMessage[] = [];
+  let usedRecentTokens = 0;
+
+  for (let index = cleanMessages.length - 1; index >= 0; index--) {
+    const message = cleanMessages[index];
+    const messageTokens = countTokens(message.content) + 8;
+    if (recentMessages.length > 0 && usedRecentTokens + messageTokens > recentBudget) break;
+    recentMessages.unshift(message);
+    usedRecentTokens += messageTokens;
+  }
+
+  const recentStart = Math.max(0, cleanMessages.length - recentMessages.length);
+  const olderMessages = cleanMessages.slice(0, recentStart);
+  const olderText = olderMessages
+    .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+    .join("\n\n");
+
+  return {
+    olderContext: trimToTokenBudget(olderText, olderBudget),
+    recentMessages,
+  };
+}
+
+function mergeOpenAIContextMessages(messages: ContextMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return messages.reduce<Array<{ role: "user" | "assistant"; content: string }>>((acc, message) => {
+    const last = acc[acc.length - 1];
+    if (last?.role === message.role) {
+      last.content += `\n\n${message.content}`;
+    } else {
+      acc.push({ role: message.role, content: message.content });
+    }
+    return acc;
+  }, []);
+}
+
+function buildOpenAIHistoryMessages(messages: Message[], tokenBudget: number): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const { olderContext, recentMessages } = buildContextMessages(messages, tokenBudget);
+  const history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
+
+  if (olderContext) {
+    history.push({
+      role: "system",
+      content: `Earlier conversation context, compacted because the full chat is longer than the model window:\n${olderContext}`,
+    });
+  }
+
+  history.push(...mergeOpenAIContextMessages(recentMessages));
+  return history;
+}
+
+function buildGeminiHistoryContents(messages: Message[], tokenBudget: number): any[] {
+  const { olderContext, recentMessages } = buildContextMessages(messages, tokenBudget);
+  const turns: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+
+  if (olderContext) {
+    turns.push({
+      role: "user",
+      parts: [{ text: `Earlier conversation context, compacted because the full chat is longer than the model window:\n${olderContext}` }],
+    });
+  }
+
+  for (const message of recentMessages) {
+    const role = message.role === "user" ? "user" : "model";
+    const last = turns[turns.length - 1];
+    if (last?.role === role) {
+      last.parts[0].text += `\n\n${message.content}`;
+    } else {
+      if (turns.length === 0 && role === "model") {
+        turns.push({ role: "user", parts: [{ text: "Continue from the previous conversation." }] });
+      }
+      turns.push({ role, parts: [{ text: message.content }] });
+    }
+  }
+
+  return turns;
+}
+
+function buildPlainHistoryContext(messages: Message[], tokenBudget: number): string {
+  const { olderContext, recentMessages } = buildContextMessages(messages, tokenBudget);
+  const recentText = recentMessages
+    .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+    .join("\n");
+
+  return [olderContext ? `Earlier conversation context:\n${olderContext}` : "", recentText]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function normalizeMemoryContent(content: string): string {
+  return content.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+function extractRememberedName(content: string): string | null {
+  const normalized = normalizeMemoryContent(content);
+  const match = normalized.match(/\b(?:user is named|users name is|user name is|my name is|i am|im|i'm)\s+([\p{L}\p{N}_-]{2,})\b/u);
+  return match?.[1] || null;
+}
+
+function isDuplicateMemoryFact(memories: { content: string }[], fact: string): boolean {
+  const normalizedFact = normalizeMemoryContent(fact);
+  const rememberedName = extractRememberedName(fact);
+
+  return memories.some(memory => {
+    if (normalizeMemoryContent(memory.content) === normalizedFact) return true;
+    return Boolean(rememberedName && extractRememberedName(memory.content) === rememberedName);
+  });
+}
+
 const VOICE_PERSONALITY_PROMPTS: Record<string, string> = {
   Assistant:
     "You are a highly efficient, polished, and warm digital assistant. Speak with clarity and a helpful cadence. Your tone is crisp and professional, but never robotic.",
@@ -936,10 +1085,8 @@ export function Chat({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
 
-  // State for search and memory indicators
-  const [isSearching, setIsSearching] = useState(false);
+  // State for search controls
   const [searchStatus, setSearchStatus] = useState<string | null>(null);
-  const [memoryUpdates, setMemoryUpdates] = useState<string[]>([]);
 
   // Token usage tracking
   const [tokenUsage, setTokenUsage] = useState({ input: 0, output: 0, total: 0 });
@@ -1135,14 +1282,15 @@ export function Chat({
     Array.from(files).forEach((file) => {
       const reader = new FileReader();
       reader.onload = (event) => {
-        const base64 = event.target?.result as string;
+        const dataUrl = event.target?.result as string;
+        const base64 = dataUrl.split(",")[1] || '';
         setAttachedFiles((prev) => [
           ...prev,
           {
             name: file.name,
             type: file.type,
-            data: base64.split(",")[1],
-            previewUrl: URL.createObjectURL(file),
+            data: base64,
+            previewUrl: dataUrl,
           },
         ]);
       };
@@ -1154,7 +1302,9 @@ export function Chat({
   const removeFile = (index: number) => {
     setAttachedFiles((prev) => {
       const newFiles = [...prev];
-      URL.revokeObjectURL(newFiles[index].previewUrl);
+      if (newFiles[index].previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(newFiles[index].previewUrl);
+      }
       newFiles.splice(index, 1);
       return newFiles;
     });
@@ -1234,19 +1384,10 @@ export function Chat({
 
       const ai = new GoogleGenAI({ apiKey: effectiveApiKey, apiVersion: "v1beta" });
 
-      const validMessages = session.messages.filter(
-        (m) => m.text.trim().length > 0
+      const historyContext = buildPlainHistoryContext(
+        session.messages,
+        Math.max(8000, Math.floor(getContextWindow("gemini-3.1-flash-live-preview") * 0.04)),
       );
-
-      // Concatenate history into a single context string to avoid large turn lists
-      const historyContext = validMessages
-        .slice(-10) // Only take last 10 messages for context to keep it snappy
-        .map((m) => {
-          const { mainContent } = parseText(m.text);
-          const safeText = mainContent || m.text;
-          return `${m.sender === "user" ? "User" : "Assistant"}: ${safeText}`;
-        })
-        .join("\n");
 
       const systemInstructionBase = (() => {
         if (voiceSettings.personality === "Custom") {
@@ -1535,7 +1676,7 @@ export function Chat({
   const handleStop = () => {
     isCanceled.current = true;
     setIsGenerating(false);
-    setIsSearching(false);
+    setSearchStatus(null);
   };
 
   // Helper to check if model is Gemini-compatible
@@ -1543,10 +1684,36 @@ export function Chat({
     return model?.includes('gemini') || model?.includes('flash') || model?.includes('pro') || model?.includes('gemma');
   };
 
+  const supportsToolCalling = (model: string): boolean => {
+    const normalized = model.toLowerCase();
+    if (normalized.includes('gemma')) return false;
+    if (normalized.includes('whisper') || normalized.includes('embedding') || normalized.includes('tts')) return false;
+    return true;
+  };
+
+  const saveMemoryIfNew = (fact?: string) => {
+    const cleanFact = fact?.trim();
+    if (!cleanFact) {
+      return { saved: false, message: "No memory fact was provided." };
+    }
+
+    if (isDuplicateMemoryFact(memories, cleanFact)) {
+      return { saved: false, message: "That memory already exists. Continue naturally without saying it was saved again." };
+    }
+
+    saveMemory(cleanFact);
+    return { saved: true, message: "Memory saved successfully. Continue the conversation naturally." };
+  };
+
   // Check if we can use Gemini API for title generation
   const canUseGeminiForTitle = (): boolean => {
     const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
     return effectiveApiKey && selectedModel && isGeminiModel(selectedModel);
+  };
+
+  const isIncompleteJsonError = (error: unknown) => {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    return message.includes('unexpected end') || message.includes('unterminated') || message.includes('incomplete');
   };
 
   const searchDetectionPrompt = (query: string) => `Analyze this user query and determine if it requires web search to provide accurate, up-to-date information.
@@ -1652,12 +1819,154 @@ Web search is NOT needed for:
     }
   };
 
-  const performWebSearch = async (query: string): Promise<string> => {
-    setIsSearching(true);
+  const performWebSearch = async (query: string, onInlineStatus?: (status: string) => void): Promise<string> => {
     setSearchStatus('Searching the web...');
+    onInlineStatus?.('Searching the web...');
 
     try {
-      if (genSettings.webSearchProvider === 'endpoint') {
+      const searchEngine = genSettings.webSearchEngine || (genSettings.webSearchProvider === 'endpoint' ? 'endpoint' : 'gemini');
+
+      const fetchJsonWithProxyFallback = async (url: string, init?: RequestInit) => {
+        try {
+          const response = await fetch(url, init);
+          if (response.ok) return response.json();
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error?.message || errorData.error || `Search request failed with status ${response.status}.`);
+        } catch (err: any) {
+          const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+            const proxyResponse = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+              method: init?.method || 'GET',
+              headers: {
+                ...(init?.headers || {}),
+                'x-target-url': url,
+              },
+              body: init?.body,
+            });
+            if (!proxyResponse.ok) {
+              const proxyError = await proxyResponse.json().catch(() => ({}));
+              throw new Error(proxyError.error?.message || proxyError.error || `Search proxy failed with status ${proxyResponse.status}.`);
+            }
+            return proxyResponse.json();
+          }
+          throw err;
+        }
+      };
+
+      const fetchTextWithProxyFallback = async (url: string, init?: RequestInit) => {
+        try {
+          const response = await fetch(url, init);
+          if (response.ok) return response.text();
+          throw new Error(`Search request failed with status ${response.status}.`);
+        } catch (err: any) {
+          const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+          if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+            const proxyResponse = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+              method: init?.method || 'GET',
+              headers: {
+                ...(init?.headers || {}),
+                'x-target-url': url,
+              },
+              body: init?.body,
+            });
+            if (!proxyResponse.ok) {
+              throw new Error(`Search proxy failed with status ${proxyResponse.status}.`);
+            }
+            return proxyResponse.text();
+          }
+          throw err;
+        }
+      };
+
+      const decodeDuckDuckGoUrl = (href: string) => {
+        try {
+          const url = new URL(href, 'https://duckduckgo.com');
+          const redirected = url.searchParams.get('uddg');
+          return redirected ? decodeURIComponent(redirected) : url.href;
+        } catch {
+          return href;
+        }
+      };
+
+      const parseDuckDuckGoHtmlResults = (html: string) => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        return Array.from(doc.querySelectorAll('.result, .web-result'))
+          .map((result) => {
+            const link = result.querySelector<HTMLAnchorElement>('.result__a, a.result-link, a[href]');
+            const snippet = result.querySelector<HTMLElement>('.result__snippet, .result-snippet');
+            const title = link?.textContent?.replace(/\s+/g, ' ').trim() || '';
+            const url = link?.getAttribute('href') ? decodeDuckDuckGoUrl(link.getAttribute('href') || '') : '';
+            const text = snippet?.textContent?.replace(/\s+/g, ' ').trim() || '';
+            return { title, url, snippet: text };
+          })
+          .filter(result => result.title && result.url)
+          .slice(0, 8);
+      };
+
+      if (searchEngine === 'google-custom') {
+        const apiKey = genSettings.googleSearchApiKey?.trim();
+        const cx = genSettings.googleSearchCx?.trim();
+        if (!apiKey || !cx) {
+          throw new Error('Google Custom Search API key and search engine ID are required.');
+        }
+
+        const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(query)}&num=8`;
+        const data = await fetchJsonWithProxyFallback(url);
+        const items = Array.isArray(data?.items) ? data.items : [];
+        if (items.length === 0) throw new Error('Google Custom Search returned no results.');
+
+        const resultsText = items
+          .map((item: any, index: number) => {
+            const title = item.title || 'Untitled';
+            const link = item.link || '';
+            const snippet = item.snippet || '';
+            return `[${index + 1}] ${title}\n${link}\n${snippet}`;
+          })
+          .join('\n\n');
+
+        setSearchStatus(`Found ${items.length} Google result${items.length !== 1 ? 's' : ''}`);
+        onInlineStatus?.(`Found ${items.length} Google result${items.length !== 1 ? 's' : ''}. Reading sources...`);
+        setTimeout(() => setSearchStatus(null), 3000);
+        return `\n\n[Web Search Results]\n${resultsText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
+      }
+
+      if (searchEngine === 'duckduckgo') {
+        const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const data = await fetchJsonWithProxyFallback(url);
+        const relatedTopics = Array.isArray(data?.RelatedTopics) ? data.RelatedTopics : [];
+        const flattenedTopics = relatedTopics.flatMap((topic: any) => Array.isArray(topic.Topics) ? topic.Topics : [topic]);
+        const results = [
+          data?.AbstractText ? {
+            title: data?.Heading || 'DuckDuckGo abstract',
+            url: data?.AbstractURL || '',
+            snippet: data.AbstractText,
+          } : null,
+          ...flattenedTopics.map((topic: any) => ({
+            title: topic.Text?.split(' - ')[0] || 'DuckDuckGo result',
+            url: topic.FirstURL || '',
+            snippet: topic.Text || '',
+          })),
+        ].filter((result: any) => result?.snippet || result?.url).slice(0, 8);
+
+        if (results.length === 0) {
+          onInlineStatus?.('DuckDuckGo instant answers were empty. Checking web results...');
+          const html = await fetchTextWithProxyFallback(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+          results.push(...parseDuckDuckGoHtmlResults(html));
+        }
+
+        if (results.length === 0) throw new Error('DuckDuckGo returned no web results.');
+
+        const resultsText = results
+          .map((result: any, index: number) => `[${index + 1}] ${result.title}\n${result.url}\n${result.snippet}`)
+          .join('\n\n');
+
+        setSearchStatus(`Found ${results.length} DuckDuckGo result${results.length !== 1 ? 's' : ''}`);
+        onInlineStatus?.(`Found ${results.length} DuckDuckGo result${results.length !== 1 ? 's' : ''}. Reading sources...`);
+        setTimeout(() => setSearchStatus(null), 3000);
+        return `\n\n[Web Search Results]\n${resultsText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
+      }
+
+      if (searchEngine === 'endpoint') {
         const searchEndpoint = endpoints.find(e => e.id === genSettings.webSearchEndpointId);
         const searchModel = genSettings.webSearchModel;
 
@@ -1717,6 +2026,7 @@ Web search is NOT needed for:
         if (!searchText) throw new Error('Endpoint web search returned no text.');
 
         setSearchStatus('Endpoint search complete');
+        onInlineStatus?.('Endpoint search complete. Reading sources...');
         setTimeout(() => setSearchStatus(null), 3000);
         return `\n\n[Web Search Results]\n${searchText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
       }
@@ -1755,10 +2065,11 @@ Web search is NOT needed for:
       }
 
       setSearchStatus(`Found ${sourceCount} source${sourceCount !== 1 ? 's' : ''}`);
+      onInlineStatus?.(`Found ${sourceCount} source${sourceCount !== 1 ? 's' : ''}. Reading sources...`);
       setTimeout(() => setSearchStatus(null), 3000);
       return `\n\n[Web Search Results]\n${searchResult.text}${sourcesText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite the sources provided using standard markdown links:\n`;
     } finally {
-      setIsSearching(false);
+      setTimeout(() => setSearchStatus(null), 500);
     }
   };
 
@@ -1784,7 +2095,7 @@ Web search is NOT needed for:
         name: f.name,
         type: f.type,
         data: f.data,
-        url: f.previewUrl,
+        url: f.previewUrl.startsWith('data:') ? f.previewUrl : undefined,
       })),
       tokenCount: countTokens(promptTextRaw)
     };
@@ -1825,6 +2136,8 @@ Web search is NOT needed for:
         ? `${promptTextRaw}\n\nPlease wrap your deep thinking process in over <think>...</think> tags.`
         : promptTextRaw;
       let fullText = "";
+      let inlineStatusText = "";
+      let inlineMemoryNotice = "";
 
       // Track token usage for this request
       const requestStartTime = Date.now();
@@ -1838,6 +2151,29 @@ Web search is NOT needed for:
           mimeType: file.type,
         },
       }));
+
+      const botDisplayText = (text = fullText) => [
+        inlineMemoryNotice ? `> ${inlineMemoryNotice}` : "",
+        text || inlineStatusText,
+      ].filter(Boolean).join("\n\n");
+
+      const updateBotMessageText = (text = fullText) => {
+        currentMessages = currentMessages.map((msg) =>
+          msg.id === botMessageId ? { ...msg, text: botDisplayText(text) } : msg,
+        );
+        updateSession(session.id, { messages: currentMessages });
+      };
+
+      const updateInlineBotStatus = (status: string) => {
+        inlineStatusText = status;
+        if (!fullText) updateBotMessageText("");
+      };
+
+      const updateInlineMemoryNotice = (fact: string) => {
+        const shortFact = fact.length > 80 ? `${fact.slice(0, 80)}...` : fact;
+        inlineMemoryNotice = `Memory updated: ${shortFact}`;
+        updateBotMessageText();
+      };
 
       // Check if it's an endpoint model
       let customModel = endpointModels.find((m) => m.name === modelName);
@@ -1861,33 +2197,33 @@ Web search is NOT needed for:
 
       if (genSettings.webSearchMode === 'auto') {
         setSearchStatus('detecting...');
+        updateInlineBotStatus('Checking whether web search is needed...');
         shouldSearch = await detectSearchNeed(promptTextRaw, modelName, endpoint);
         setSearchStatus(null);
       }
 
       if (shouldSearch) {
         try {
-          searchContext = await performWebSearch(promptTextRaw);
+          searchContext = await performWebSearch(promptTextRaw, updateInlineBotStatus);
         } catch (searchErr: any) {
           if (searchErr?.message?.includes('quota') || searchErr?.status === 429) {
             console.warn('[Web Search] Quota exceeded, skipping search');
             setSearchStatus('Search quota exceeded');
+            updateInlineBotStatus('Search quota exceeded. Answering without web results...');
           } else {
             console.warn("Web search failed, proceeding without search context:", searchErr);
             setSearchStatus(searchErr?.message || 'Search failed');
+            updateInlineBotStatus(`${searchErr?.message || 'Search failed'}. Answering without web results...`);
           }
           setTimeout(() => setSearchStatus(null), 2500);
         }
       }
 
       if (endpoint) {
-        // Build history messages from session (excluding empty messages)
-        const historyMessages = session.messages
-          .filter(m => m.text && m.text.trim().length > 0)
-          .map((msg) => ({
-            role: msg.sender === "user" ? "user" : "assistant",
-            content: msg.text,
-          }));
+        const historyMessages = buildOpenAIHistoryMessages(
+          session.messages,
+          Math.max(4000, Math.floor(contextWindow * 0.6)),
+        );
 
         // Build memory context for non-Gemini endpoints - more explicit and forceful
         let memoryPrompt = "";
@@ -1900,7 +2236,10 @@ Web search is NOT needed for:
         const finalPrompt = memoryPrompt + searchContext + promptText;
 
         // Build messages array with system instruction AND memory-enhanced user message
-        const memoryToolInstruction = memories.length > 0
+        const supportsMemoryTools = supportsToolCalling(modelName);
+        const memoryToolInstruction = !supportsMemoryTools
+          ? "\n\nPay attention to important user facts and preferences in the current context. This model does not expose a memory tool, so do not claim that you saved anything."
+          : memories.length > 0
           ? "\n\nYou have access to a 'save_to_memory' tool. Use this tool ONLY to store NEW, important personal facts that are NOT ALREADY present in your current memory list. DO NOT use this tool if the fact is already stored or is a minor detail."
           : "\n\nYou have access to a 'save_to_memory' tool. Use this tool when the user shares important personal information, facts, or preferences that should be remembered for future conversations.";
 
@@ -1961,7 +2300,7 @@ Web search is NOT needed for:
         }
 
         // Prepare tools for function calling (memory saving)
-        const tools = [OPENAI_MEMORY_FUNCTION];
+        const tools = supportsMemoryTools ? [OPENAI_MEMORY_FUNCTION] : undefined;
 
         // Count input tokens for this request
         inputTokensCount = countTokens(finalPrompt);
@@ -1974,9 +2313,9 @@ Web search is NOT needed for:
         const payload = {
           model: modelName,
           messages,
-          tools,
           stream: true,
           stream_options: { include_usage: true },
+          ...(tools ? { tools } : {}),
         };
 
         let response;
@@ -2018,14 +2357,14 @@ Web search is NOT needed for:
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let currentToolCall: any = null;
-        let toolCallName = "";
-        let toolCallArguments = "";
+        const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
         let hasToolCall = false;
         let pendingToolResponse: any = null;
+        let pendingJsonSegment = "";
 
         if (reader) {
           let isInReasoning = false;
+          let streamDone = false;
           while (true) {
             if (isCanceled.current) {
               reader.cancel();
@@ -2042,11 +2381,16 @@ Web search is NOT needed for:
               const trimmedLine = line.trim();
               if (!trimmedLine || !trimmedLine.startsWith("data: ")) continue;
 
-              const dataStr = trimmedLine.slice(6);
-              if (dataStr === "[DONE]") break;
+              const rawDataStr = trimmedLine.slice(6).trim();
+              if (rawDataStr === "[DONE]") {
+                streamDone = true;
+                break;
+              }
 
               try {
+                const dataStr = pendingJsonSegment ? pendingJsonSegment + rawDataStr : rawDataStr;
                 const data = JSON.parse(dataStr);
+                pendingJsonSegment = "";
 
                 if (data.usage) {
                   inputTokensCount = data.usage.prompt_tokens || inputTokensCount;
@@ -2059,17 +2403,20 @@ Web search is NOT needed for:
                 if (delta.tool_calls) {
                   hasToolCall = true;
                   for (const toolCall of delta.tool_calls) {
-                    if (toolCall.index !== undefined) {
-                      if (!currentToolCall) {
-                        currentToolCall = toolCall;
-                      }
-                      if (toolCall.function?.name) {
-                        toolCallName += toolCall.function.name;
-                      }
-                      if (toolCall.function?.arguments) {
-                        toolCallArguments += toolCall.function.arguments;
-                      }
+                    const index = toolCall.index ?? 0;
+                    const pending = pendingToolCalls.get(index) || {
+                      id: toolCall.id,
+                      name: "",
+                      arguments: "",
+                    };
+                    if (toolCall.id) pending.id = toolCall.id;
+                    if (toolCall.function?.name) {
+                      pending.name += toolCall.function.name;
                     }
+                    if (toolCall.function?.arguments) {
+                      pending.arguments += toolCall.function.arguments;
+                    }
+                    pendingToolCalls.set(index, pending);
                   }
                 }
 
@@ -2083,57 +2430,88 @@ Web search is NOT needed for:
                 }
 
                 // Regular content
-                const content = delta.content || "";
+                const content = delta.content || data.choices?.[0]?.text || "";
                 if (content) {
                   if (isInReasoning) {
                     isInReasoning = false;
                     fullText += "\n</think>\n";
                   }
                   fullText += content;
-                  currentMessages = currentMessages.map((msg) =>
-                    msg.id === botMessageId ? { ...msg, text: fullText } : msg,
-                  );
-                  updateSession(session.id, { messages: currentMessages });
+                  updateBotMessageText();
                 }
 
                 // Check if this is the last chunk (finish_reason)
                 const finishReason = data.choices[0]?.finish_reason;
                 if (finishReason === 'tool_calls' && hasToolCall && !pendingToolResponse) {
-                  console.log('[Memory Debug] Tool call detected:', toolCallName);
-                  console.log('[Memory Debug] Tool call arguments:', toolCallArguments);
+                  const assistantToolCalls: any[] = [];
+                  const toolMessages: any[] = [];
 
-                  // Execute the tool call
-                  if (toolCallName === "save_to_memory") {
-                    try {
-                      const args = JSON.parse(toolCallArguments);
-                      if (args.fact) {
-                        console.log('[Memory Debug] Saving memory:', args.fact);
-                        saveMemory(args.fact);
+                  for (const [index, toolCall] of pendingToolCalls) {
+                    const toolCallId = toolCall.id || `call_${Date.now()}_${index}`;
+                    assistantToolCalls.push({
+                      id: toolCallId,
+                      type: "function",
+                      function: {
+                        name: toolCall.name,
+                        arguments: toolCall.arguments,
+                      },
+                    });
 
-                        // Add memory update indicator
-                        const newMemory = args.fact.length > 60 ? args.fact.substring(0, 60) + '...' : args.fact;
-                        setMemoryUpdates(prev => [newMemory, ...prev]);
-                        setTimeout(() => {
-                          setMemoryUpdates(prev => prev.slice(1));
-                        }, 5000);
+                    if (toolCall.name === "save_to_memory") {
+                      console.log('[Memory Debug] Tool call detected:', toolCall.name);
+                      console.log('[Memory Debug] Tool call arguments:', toolCall.arguments);
+                      try {
+                        const args = JSON.parse(toolCall.arguments);
+                        const memoryResult = saveMemoryIfNew(args.fact);
+                        if (memoryResult.saved) {
+                          console.log('[Memory Debug] Saving memory:', args.fact);
+                          updateInlineMemoryNotice(args.fact);
+                        }
 
-                        // Store the tool call info for follow-up request after stream ends
-                        pendingToolResponse = {
-                          toolCall: currentToolCall,
-                          toolCallName,
-                          toolCallArguments,
-                          messagesSnapshot: [...messages]
-                        };
+                        toolMessages.push({
+                          role: "tool",
+                          tool_call_id: toolCallId,
+                          content: JSON.stringify({ result: memoryResult.message }),
+                        });
+                      } catch (e) {
+                        console.error("Error executing tool call:", e);
+                        toolMessages.push({
+                          role: "tool",
+                          tool_call_id: toolCallId,
+                          content: JSON.stringify({ error: "Unable to parse memory arguments. Continue without saving memory." }),
+                        });
                       }
-                    } catch (e) {
-                      console.error("Error executing tool call:", e);
+                    } else {
+                      toolMessages.push({
+                        role: "tool",
+                        tool_call_id: toolCallId,
+                        content: JSON.stringify({ error: `Unsupported tool: ${toolCall.name}` }),
+                      });
                     }
+                  }
+
+                  if (assistantToolCalls.length > 0) {
+                    pendingToolResponse = {
+                      assistantToolCalls,
+                      toolMessages,
+                      messagesSnapshot: [...messages],
+                    };
                   }
                 }
               } catch (e) {
-                console.error("Error parsing stream chunk", e, dataStr);
+                const dataStr = pendingJsonSegment ? pendingJsonSegment + rawDataStr : rawDataStr;
+                if (isIncompleteJsonError(e)) {
+                  pendingJsonSegment = dataStr;
+                } else {
+                  pendingJsonSegment = "";
+                  console.error("Error parsing stream chunk", e, dataStr);
+                }
               }
             }
+            if (streamDone) break;
+          }
+          if (pendingJsonSegment) {
+            console.warn("Endpoint stream ended with an incomplete JSON segment; ignoring trailing partial data.");
           }
         }
 
@@ -2146,28 +2524,17 @@ Web search is NOT needed for:
               {
                 role: "assistant",
                 content: fullText || null,
-                tool_calls: [{
-                  id: pendingToolResponse.toolCall?.id || "call_" + Date.now(),
-                  type: "function",
-                  function: {
-                    name: pendingToolResponse.toolCallName,
-                    arguments: pendingToolResponse.toolCallArguments
-                  }
-                }]
+                tool_calls: pendingToolResponse.assistantToolCalls,
               },
-              {
-                role: "tool",
-                tool_call_id: pendingToolResponse.toolCall?.id || "call_" + Date.now(),
-                content: JSON.stringify({ result: "Memory saved successfully. Continue the conversation naturally." })
-              }
+              ...pendingToolResponse.toolMessages
             ];
 
             const followupPayload = {
               model: modelName,
               messages: toolResponseMessages,
-              tools,
               stream: true,
               stream_options: { include_usage: true },
+              ...(tools ? { tools } : {}),
             };
 
             let followupResponse;
@@ -2198,10 +2565,17 @@ Web search is NOT needed for:
               }
             }
 
+            if (!followupResponse.ok) {
+              const followupError = await followupResponse.json().catch(() => ({}));
+              throw new Error(followupError.error?.message || "Memory follow-up request failed.");
+            }
+
             if (followupResponse.ok) {
               const followupReader = followupResponse.body?.getReader();
               if (followupReader) {
                 let followupBuffer = "";
+                let followupPendingJsonSegment = "";
+                let followupDone = false;
 
                 while (true) {
                   if (isCanceled.current) {
@@ -2219,11 +2593,16 @@ Web search is NOT needed for:
                     const followupTrimmedLine = followupLine.trim();
                     if (!followupTrimmedLine || !followupTrimmedLine.startsWith("data: ")) continue;
 
-                    const followupDataStr = followupTrimmedLine.slice(6);
-                    if (followupDataStr === "[DONE]") break;
+                    const rawFollowupDataStr = followupTrimmedLine.slice(6).trim();
+                    if (rawFollowupDataStr === "[DONE]") {
+                      followupDone = true;
+                      break;
+                    }
 
                     try {
+                      const followupDataStr = followupPendingJsonSegment ? followupPendingJsonSegment + rawFollowupDataStr : rawFollowupDataStr;
                       const followupData = JSON.parse(followupDataStr);
+                      followupPendingJsonSegment = "";
                       if (followupData.usage) {
                         inputTokensCount = followupData.usage.prompt_tokens || inputTokensCount;
                         outputTokensCount = followupData.usage.completion_tokens || outputTokensCount;
@@ -2234,15 +2613,22 @@ Web search is NOT needed for:
                         : "";
                       if (followupContent) {
                         fullText += followupContent;
-                        currentMessages = currentMessages.map((msg) =>
-                          msg.id === botMessageId ? { ...msg, text: fullText } : msg,
-                        );
-                        updateSession(session.id, { messages: currentMessages });
+                        updateBotMessageText();
                       }
                     } catch (e) {
-                      console.error("Error parsing followup stream chunk", e);
+                      const followupDataStr = followupPendingJsonSegment ? followupPendingJsonSegment + rawFollowupDataStr : rawFollowupDataStr;
+                      if (isIncompleteJsonError(e)) {
+                        followupPendingJsonSegment = followupDataStr;
+                      } else {
+                        followupPendingJsonSegment = "";
+                        console.error("Error parsing followup stream chunk", e);
+                      }
                     }
                   }
+                  if (followupDone) break;
+                }
+                if (followupPendingJsonSegment) {
+                  console.warn("Endpoint follow-up stream ended with an incomplete JSON segment; ignoring trailing partial data.");
                 }
               }
             }
@@ -2270,25 +2656,10 @@ Web search is NOT needed for:
         if (!effectiveApiKey) {
           throw new Error("Gemini API key not found. Please provide one in Settings.");
         }
-        const validMessages = session.messages.filter(
-          (m) => m.text.trim().length > 0
+        const historyContents = buildGeminiHistoryContents(
+          session.messages,
+          Math.max(4000, Math.floor(contextWindow * 0.6)),
         );
-        const historyContents = validMessages.reduce((acc: any[], msg) => {
-          const role = msg.sender === "user" ? "user" : "model";
-          const { mainContent } = parseText(msg.text);
-          const safeText = mainContent || msg.text;
-
-          const last = acc[acc.length - 1];
-          if (last && last.role === role) {
-            last.parts[0].text += "\n" + safeText;
-          } else {
-            if (acc.length === 0 && role === "model") {
-              acc.push({ role: "user", parts: [{ text: "Hi" }] });
-            }
-            acc.push({ role, parts: [{ text: safeText }] });
-          }
-          return acc;
-        }, []);
 
         const systemInstructionBaseText = (() => {
           if (voiceSettings.textPersonality === "Custom") {
@@ -2309,18 +2680,20 @@ Web search is NOT needed for:
         const systemInstructionText = `${systemInstructionBaseText}${isThinkingMode
             ? " ALWAYS start your response with a deep thinking process enclosed in <think>...</think> tags. Outline your reasoning, plan, and tone adjustment before providing the final response after the tags."
             : ""
-          }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.${artifactInstruction}\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}\nYou have the tool 'save_to_memory' to store NEW important facts. DO NOT save duplicate facts that are already in your memory list.`;
+          }\n\nCRITICAL RULE: Do not buffer your output. Output your response using the standard streaming protocol.\n\nFORMATTING RULE: When providing code, ALWAYS wrap it in Markdown triple backticks (\`\`\`) with the appropriate language identifier.${artifactInstruction}\n\nCurrent Long-term Memories:\n${memories.length > 0 ? memories.map(m => `- ${m.content}`).join('\n') : 'No existing memories.'}${supportsToolCalling(modelName) ? "\nYou have the tool 'save_to_memory' to store NEW important facts. DO NOT save duplicate facts that are already in your memory list." : "\nUse these memories as context. This model does not expose a memory tool, so do not claim that you saved anything."}`;
 
         const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
 
-        const tools: any[] = [MEMORY_TOOL_DEFINITION];
+        const tools: any[] = supportsToolCalling(modelName) ? [MEMORY_TOOL_DEFINITION] : [];
 
         const chatSession = ai.chats.create({
           model: modelName,
           config: {
             systemInstruction: systemInstructionText,
-            tools: tools,
-            toolConfig: { includeServerSideToolInvocations: true },
+            ...(tools.length ? {
+              tools,
+              toolConfig: { includeServerSideToolInvocations: true },
+            } : {}),
             maxOutputTokens: 65536
           },
           history: historyContents
@@ -2379,12 +2752,13 @@ Web search is NOT needed for:
             for (const fc of functionCalls) {
               if (fc.name === "save_to_memory") {
                 const fact = (fc.args as any).fact;
-                saveMemory(fact);
+                const memoryResult = saveMemoryIfNew(fact);
+                if (memoryResult.saved) updateInlineMemoryNotice(fact);
 
                 functionCallResults.push({
                   functionResponse: {
                     name: fc.name,
-                    response: { result: "Memory saved successfully. You can now continue with the conversation." }
+                    response: { result: memoryResult.message }
                   }
                 });
               }
@@ -2394,10 +2768,7 @@ Web search is NOT needed for:
           const chunkText = getChunkContent(chunk);
           if (chunkText) {
             fullText += chunkText;
-            currentMessages = currentMessages.map((msg) =>
-              msg.id === botMessageId ? { ...msg, text: fullText } : msg,
-            );
-            updateSession(session.id, { messages: currentMessages });
+            updateBotMessageText();
             hasResponded = true;
           }
         }
@@ -2413,10 +2784,7 @@ Web search is NOT needed for:
             const chunkText = getChunkContent(chunk);
             if (chunkText) {
               fullText += chunkText;
-              currentMessages = currentMessages.map((msg) =>
-                msg.id === botMessageId ? { ...msg, text: fullText } : msg,
-              );
-              updateSession(session.id, { messages: currentMessages });
+              updateBotMessageText();
               hasResponded = true;
             }
           }
@@ -2470,6 +2838,25 @@ Web search is NOT needed for:
             return cleanTitle(titleSource.split(/\s+/).slice(0, 4).join(' '));
           };
 
+          const extractTitleText = (data: any): string => {
+            const messageContent = data?.choices?.[0]?.message?.content;
+            if (typeof messageContent === 'string') return messageContent;
+            if (Array.isArray(messageContent)) {
+              return messageContent
+                .map((part: any) => typeof part === 'string' ? part : part?.text || part?.content || '')
+                .join(' ');
+            }
+            if (typeof data?.choices?.[0]?.text === 'string') return data.choices[0].text;
+            if (typeof data?.output_text === 'string') return data.output_text;
+            if (Array.isArray(data?.output)) {
+              return data.output
+                .flatMap((item: any) => item?.content || [])
+                .map((part: any) => part?.text || '')
+                .join(' ');
+            }
+            return '';
+          };
+
           try {
             const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
 
@@ -2515,46 +2902,138 @@ Title:`;
                 },
               ];
 
-              const titlePayload = {
-                model: modelName,
-                messages: titleMessages,
-                max_tokens: 24,
-                temperature: 0.2,
+              const postTitlePayload = async (payload: any) => {
+                try {
+                  return await fetch(`${endpoint.url}/chat/completions`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${endpoint.key}`,
+                    },
+                    body: JSON.stringify(payload),
+                  });
+                } catch (err: any) {
+                  const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+                  if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
+                    return fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${endpoint.key}`,
+                        "x-target-url": `${endpoint.url}/chat/completions`,
+                      },
+                      body: JSON.stringify(payload),
+                    });
+                  }
+                  throw err;
+                }
               };
 
-              let response: Response;
+              const titlePayloads = [
+                {
+                  model: modelName,
+                  messages: titleMessages,
+                  max_tokens: 24,
+                  temperature: 0.2,
+                },
+                {
+                  model: modelName,
+                  messages: titleMessages,
+                  max_completion_tokens: 24,
+                },
+                {
+                  model: modelName,
+                  messages: titleMessages,
+                },
+              ];
+
+              for (const titlePayload of titlePayloads) {
+                const response = await postTitlePayload(titlePayload);
+                if (!response.ok) {
+                  const errorText = await response.text().catch(() => '');
+                  console.warn('[Title] Endpoint title attempt failed:', response.status, errorText.slice(0, 240));
+                  continue;
+                }
+
+                const data = await response.json();
+                const newTitle = cleanTitle(extractTitleText(data));
+                if (newTitle && newTitle.length > 1) {
+                  updateSession(session.id, { title: newTitle });
+                  return;
+                }
+              }
+            }
+
+            if (endpoint?.url?.includes('api.openai.com')) {
+              const responsesPayload = {
+                model: modelName,
+                input: [
+                  {
+                    role: "developer",
+                    content: "Create short conversation titles. Return only the title text.",
+                  },
+                  {
+                    role: "user",
+                    content: titlePrompt,
+                  },
+                ],
+                max_output_tokens: 24,
+              };
+
               try {
-                response = await fetch(`${endpoint.url}/chat/completions`, {
+                let response = await fetch(`${endpoint.url.replace(/\/chat\/completions$/, '')}/responses`, {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${endpoint.key}`,
                   },
-                  body: JSON.stringify(titlePayload),
+                  body: JSON.stringify(responsesPayload),
                 });
+
+                if (!response.ok) {
+                  const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
+                  if (baseUrl) {
+                    response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${endpoint.key}`,
+                        "x-target-url": `${endpoint.url.replace(/\/chat\/completions$/, '')}/responses`,
+                      },
+                      body: JSON.stringify(responsesPayload),
+                    });
+                  }
+                }
+
+                if (response.ok) {
+                  const data = await response.json();
+                  const newTitle = cleanTitle(extractTitleText(data));
+                  if (newTitle && newTitle.length > 1) {
+                    updateSession(session.id, { title: newTitle });
+                    return;
+                  }
+                }
               } catch (err: any) {
                 const baseUrl = syncSettings?.apiBaseUrl || (typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : '');
-                if ((err.name === 'TypeError' || err.message === 'Failed to fetch') && baseUrl) {
-                  response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
+                if (baseUrl) {
+                  const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/proxy', {
                     method: "POST",
                     headers: {
                       "Content-Type": "application/json",
                       Authorization: `Bearer ${endpoint.key}`,
-                      "x-target-url": `${endpoint.url}/chat/completions`,
+                      "x-target-url": `${endpoint.url.replace(/\/chat\/completions$/, '')}/responses`,
                     },
-                    body: JSON.stringify(titlePayload),
+                    body: JSON.stringify(responsesPayload),
                   });
-                } else {
-                  throw err;
-                }
-              }
 
-              if (response.ok) {
-                const data = await response.json();
-                const newTitle = cleanTitle(data?.choices?.[0]?.message?.content || '');
-                if (newTitle && newTitle.length > 1) {
-                  updateSession(session.id, { title: newTitle });
-                  return;
+                  if (response.ok) {
+                    const data = await response.json();
+                    const newTitle = cleanTitle(extractTitleText(data));
+                    if (newTitle && newTitle.length > 1) {
+                      updateSession(session.id, { title: newTitle });
+                      return;
+                    }
+                  }
                 }
               }
             }
@@ -2657,58 +3136,6 @@ Title:`;
           >
             <X size={14} />
           </button>
-        </div>
-      )}
-
-      {/* Search Status Indicator */}
-      {(isSearching || searchStatus) && (
-        <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-2xl shadow-xl animate-in slide-in-from-top-4 duration-300 ${isSearching
-            ? 'bg-blue-500/10 border border-blue-500/30'
-            : 'bg-green-500/10 border border-green-500/30'
-          }`}>
-          {isSearching ? (
-            <>
-              <RefreshCw size={14} className="text-blue-500 animate-spin" />
-              <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest">
-                {searchStatus || 'Searching...'}
-              </span>
-            </>
-          ) : (
-            <>
-              <Globe size={14} className="text-green-500" />
-              <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest">
-                {searchStatus}
-              </span>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Memory Update Indicator */}
-      {memoryUpdates.length > 0 && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2 animate-in slide-in-from-top-4 duration-300">
-          {memoryUpdates.map((update, idx) => (
-            <div
-              key={idx}
-              className="flex items-center gap-3 bg-purple-500/10 border border-purple-500/30 px-4 py-2.5 rounded-2xl shadow-xl max-w-md"
-            >
-              <BrainCircuit size={14} className="text-purple-500 animate-pulse" />
-              <div className="flex flex-col">
-                <span className="text-[10px] font-bold text-purple-500 uppercase tracking-widest">
-                  Memory Updated
-                </span>
-                <span className="text-[9px] text-on-surface-variant truncate max-w-[200px]">
-                  {update}
-                </span>
-              </div>
-              <button
-                onClick={() => setMemoryUpdates(prev => prev.filter((_, i) => i !== idx))}
-                className="ml-1 w-6 h-6 rounded-full bg-purple-500/20 text-purple-500 flex items-center justify-center hover:bg-purple-500/30 transition-all"
-              >
-                <X size={10} />
-              </button>
-            </div>
-          ))}
         </div>
       )}
 
@@ -2815,16 +3242,12 @@ Title:`;
                                   >
                                     {file.type.startsWith("image/") ? (
                                       <img
-                                        src={
-                                          file.url ||
-                                          `data:${file.type};base64,${file.data}`
-                                        }
+                                        src={file.data ? `data:${file.type};base64,${file.data}` : file.url}
                                         className="w-full h-full object-cover cursor-zoom-in"
                                         alt="attachment"
                                         onClick={() =>
                                           window.open(
-                                            file.url ||
-                                            `data:${file.type};base64,${file.data}`,
+                                            file.data ? `data:${file.type};base64,${file.data}` : file.url,
                                             "_blank",
                                           )
                                         }
@@ -2834,8 +3257,7 @@ Title:`;
                                         controls
                                         className="w-full h-full object-cover"
                                         src={
-                                          file.url ||
-                                          `data:${file.type};base64,${file.data}`
+                                          file.data ? `data:${file.type};base64,${file.data}` : file.url
                                         }
                                       />
                                     ) : (
@@ -2849,8 +3271,7 @@ Title:`;
                                         </span>
                                         <a
                                           href={
-                                            file.url ||
-                                            `data:${file.type};base64,${file.data}`
+                                            file.data ? `data:${file.type};base64,${file.data}` : file.url
                                           }
                                           download={file.name}
                                           className="text-[10px] text-primary hover:underline font-bold"

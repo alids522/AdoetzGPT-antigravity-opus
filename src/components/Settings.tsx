@@ -951,17 +951,29 @@ export function Settings({
               </p>
             </div>
 
-            <div className="space-y-4">
-              <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Search Provider</label>
-              <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-4 md:col-span-2">
+              <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Search Engine</label>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                 <button
                   onClick={() => {
                     const geminiSearchModel = [genSettings.webSearchModel, ...geminiModels].find(model => model && model.includes('gemini')) || 'gemini-flash-lite-latest';
-                    setGenSettings({ ...genSettings, webSearchProvider: 'gemini', webSearchModel: geminiSearchModel });
+                    setGenSettings({ ...genSettings, webSearchEngine: 'gemini', webSearchProvider: 'gemini', webSearchModel: geminiSearchModel });
                   }}
-                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchProvider !== 'endpoint' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchEngine === 'gemini' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
                 >
                   Gemini Grounding
+                </button>
+                <button
+                  onClick={() => setGenSettings({ ...genSettings, webSearchEngine: 'google-custom', webSearchProvider: 'gemini' })}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchEngine === 'google-custom' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                >
+                  Google Custom
+                </button>
+                <button
+                  onClick={() => setGenSettings({ ...genSettings, webSearchEngine: 'duckduckgo', webSearchProvider: 'gemini' })}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchEngine === 'duckduckgo' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                >
+                  DuckDuckGo
                 </button>
                 <button
                   onClick={() => {
@@ -970,22 +982,23 @@ export function Settings({
                     const currentEndpointModel = endpointModels.find(m => m.name === genSettings.webSearchModel);
                     setGenSettings({
                       ...genSettings,
+                      webSearchEngine: 'endpoint',
                       webSearchProvider: 'endpoint',
                       webSearchEndpointId: currentEndpointModel?.endpointId || genSettings.webSearchEndpointId || firstEndpoint?.id || '',
                       webSearchModel: currentEndpointModel?.name || firstModel?.name || '',
                     });
                   }}
-                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchProvider === 'endpoint' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchEngine === 'endpoint' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
                 >
                   Endpoint
                 </button>
               </div>
               <p className="text-[10px] text-on-surface-variant italic leading-relaxed">
-                Gemini Grounding performs the actual Google Search pre-pass. Endpoint search only works when your provider/model has live web access.
+                Gemini Grounding uses Gemini's built-in Google Search. Google Custom uses your Programmable Search API key and search engine ID. DuckDuckGo uses the public instant answer API. Endpoint only works when your provider/model has live web access.
               </p>
             </div>
 
-            {genSettings.webSearchProvider === 'endpoint' ? (
+            {genSettings.webSearchEngine === 'endpoint' ? (
               <div className="space-y-4">
                 <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Endpoint Search Model</label>
                 <select
@@ -1018,6 +1031,31 @@ export function Settings({
                       <option key={`${model.endpointId}:${model.name}`} value={model.name}>{model.name}</option>
                     ))}
                 </select>
+              </div>
+            ) : genSettings.webSearchEngine === 'google-custom' ? (
+              <div className="space-y-4">
+                <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Google Custom Search API</label>
+                <input
+                  type="password"
+                  value={genSettings.googleSearchApiKey || ''}
+                  onChange={(e) => setGenSettings({ ...genSettings, googleSearchApiKey: e.target.value })}
+                  placeholder="Google API key"
+                  className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
+                />
+                <input
+                  type="text"
+                  value={genSettings.googleSearchCx || ''}
+                  onChange={(e) => setGenSettings({ ...genSettings, googleSearchCx: e.target.value })}
+                  placeholder="Search engine ID (cx)"
+                  className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
+                />
+              </div>
+            ) : genSettings.webSearchEngine === 'duckduckgo' ? (
+              <div className="space-y-4">
+                <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">DuckDuckGo Search</label>
+                <div className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface-variant">
+                  No API key required.
+                </div>
               </div>
             ) : (
               <div className="space-y-4">

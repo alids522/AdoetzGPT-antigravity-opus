@@ -27,8 +27,13 @@ export interface PersistedAppState {
 const APP_STATE_KEY = 'adoetzgpt.appState';
 const LEGACY_APP_STATE_KEY = 'appState';
 const LOCAL_TEXT_LIMIT = 12000;
-const LOCAL_ATTACHMENT_DATA_LIMIT = 12000;
-const HISTORY_LIMITS = [50, 25, 10, 5, 1, 0];
+const LOCAL_ATTACHMENT_DATA_LIMIT = 2_000_000;
+const STORAGE_ATTEMPTS = [
+  { textLimit: LOCAL_TEXT_LIMIT, attachmentDataLimit: LOCAL_ATTACHMENT_DATA_LIMIT },
+  { textLimit: LOCAL_TEXT_LIMIT, attachmentDataLimit: 0 },
+  { textLimit: 4000, attachmentDataLimit: 0 },
+  { textLimit: 1200, attachmentDataLimit: 0 },
+];
 
 function apiUrl(syncSettings?: SyncSettings, path = '') {
   const base = syncSettings?.apiBaseUrl?.trim().replace(/\/$/, '') || '';
@@ -77,23 +82,27 @@ function compactText(text: string, limit: number): string {
   return `${text.slice(0, Math.floor(limit * 0.65))}\n\n[Earlier saved content compacted]\n\n${text.slice(-Math.floor(limit * 0.35))}`;
 }
 
-function compactMessage(message: Session['messages'][number], textLimit: number) {
+function compactMessage(message: Session['messages'][number], textLimit: number, attachmentDataLimit: number) {
   return {
     ...message,
     text: compactText(message.text, textLimit),
-    attachments: message.attachments?.map((attachment) => ({
-      ...attachment,
-      data: attachment.data.length > LOCAL_ATTACHMENT_DATA_LIMIT ? '' : attachment.data,
-    })),
+    attachments: message.attachments?.map((attachment) => {
+      const keepData = attachmentDataLimit > 0 && attachment.data.length <= attachmentDataLimit;
+      return {
+        ...attachment,
+        data: keepData ? attachment.data : '',
+        url: undefined,
+      };
+    }),
   };
 }
 
-function compactStateForLocalStorage(state: PersistedAppState, messageLimit: number, textLimit = LOCAL_TEXT_LIMIT): PersistedAppState {
+function compactStateForStorage(state: PersistedAppState, textLimit = LOCAL_TEXT_LIMIT, attachmentDataLimit = LOCAL_ATTACHMENT_DATA_LIMIT): PersistedAppState {
   return {
     ...state,
     sessions: state.sessions.map((session) => ({
       ...session,
-      messages: session.messages.slice(-messageLimit).map((message) => compactMessage(message, textLimit)),
+      messages: session.messages.map((message) => compactMessage(message, textLimit, attachmentDataLimit)),
     })),
     tokenUsageData: state.tokenUsageData.slice(-500),
   };
@@ -107,10 +116,9 @@ function saveStateJson(json: string): void {
 function saveLocalState(state: PersistedAppState): void {
   let lastError: unknown;
 
-  for (const messageLimit of HISTORY_LIMITS) {
+  for (const attempt of STORAGE_ATTEMPTS) {
     try {
-      const textLimit = messageLimit <= 5 ? 4000 : LOCAL_TEXT_LIMIT;
-      saveStateJson(JSON.stringify(compactStateForLocalStorage(state, messageLimit, textLimit)));
+      saveStateJson(JSON.stringify(compactStateForStorage(state, attempt.textLimit, attempt.attachmentDataLimit)));
       return;
     } catch (error: any) {
       if (!isQuotaExceeded(error)) throw error;
@@ -160,7 +168,19 @@ export async function savePersistedState(state: PersistedAppState): Promise<void
   };
 
   if (Capacitor.isNativePlatform()) {
-    await Preferences.set({ key: APP_STATE_KEY, value: JSON.stringify(payload) });
+    let lastError: unknown;
+    for (const attempt of STORAGE_ATTEMPTS) {
+      try {
+        await Preferences.set({
+          key: APP_STATE_KEY,
+          value: JSON.stringify(compactStateForStorage(payload, attempt.textLimit, attempt.attachmentDataLimit)),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    console.warn('[Storage] Native preferences rejected compact app state.', lastError);
     return;
   }
 
