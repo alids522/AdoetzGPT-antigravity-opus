@@ -100,7 +100,7 @@ const MODEL_CONTEXT_PATTERNS: Array<{ pattern: RegExp; context: number }> = [
   { pattern: /gpt-3\.5/, context: 16385 },
   { pattern: /o1-mini/, context: 128000 },
   { pattern: /o1/, context: 200000 },
-  { pattern: /gpt/, context: 16385 },
+  { pattern: /gpt/, context: 128000 },
 
   // Claude models
   { pattern: /claude-3-5-sonnet/, context: 200000 },
@@ -159,12 +159,10 @@ function getContextWindow(model?: string): number {
   // Try each pattern in order
   for (const { pattern, context } of MODEL_CONTEXT_PATTERNS) {
     if (pattern.test(normalizedModel)) {
-      console.log(`Model "${model}" matched pattern ${pattern}, context: ${context}`);
       return context;
     }
   }
 
-  console.log(`Model "${model}" using default context: 128000`);
   return 128000;
 }
 
