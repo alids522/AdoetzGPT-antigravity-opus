@@ -27,7 +27,7 @@ export interface PersistedAppState {
 const APP_STATE_KEY = 'adoetzgpt.appState';
 const LEGACY_APP_STATE_KEY = 'appState';
 const LOCAL_TEXT_LIMIT = 12000;
-const LOCAL_ATTACHMENT_DATA_LIMIT = 2_000_000;
+const LOCAL_ATTACHMENT_DATA_LIMIT = 500_000;
 const STORAGE_ATTEMPTS = [
   { textLimit: LOCAL_TEXT_LIMIT, attachmentDataLimit: LOCAL_ATTACHMENT_DATA_LIMIT },
   { textLimit: LOCAL_TEXT_LIMIT, attachmentDataLimit: 0 },

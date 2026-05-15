@@ -1280,21 +1280,60 @@ export function Chat({
     if (!files) return;
 
     Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target?.result as string;
-        const base64 = dataUrl.split(",")[1] || '';
-        setAttachedFiles((prev) => [
-          ...prev,
-          {
-            name: file.name,
-            type: file.type,
-            data: base64,
-            previewUrl: dataUrl,
-          },
-        ]);
-      };
-      reader.readAsDataURL(file);
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 1200;
+            const MAX_HEIGHT = 1200;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) {
+                height *= MAX_WIDTH / width;
+                width = MAX_WIDTH;
+              }
+            } else {
+              if (height > MAX_HEIGHT) {
+                width *= MAX_HEIGHT / height;
+                height = MAX_HEIGHT;
+              }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+              const base64 = dataUrl.split(',')[1] || '';
+              setAttachedFiles((prev) => [
+                ...prev,
+                { name: file.name, type: 'image/jpeg', data: base64, previewUrl: dataUrl },
+              ]);
+            }
+          };
+          img.src = event.target?.result as string;
+        };
+        reader.readAsDataURL(file);
+      } else {
+        if (file.size > 5_000_000) {
+          alert(`File "${file.name}" is too large. Please upload files under 5MB.`);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          const base64 = dataUrl.split(",")[1] || '';
+          setAttachedFiles((prev) => [
+            ...prev,
+            { name: file.name, type: file.type, data: base64, previewUrl: dataUrl },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      }
     });
     setIsPlusMenuOpen(false);
   };
