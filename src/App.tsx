@@ -303,6 +303,8 @@ export default function App() {
     const saved = Number(localStorage.getItem('lastSyncAt') || 0);
     return saved || null;
   });
+  const [lastPushedHash, setLastPushedHash] = useState<string>('');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Settings State
   const [userName, setUserName] = useState(() => {
@@ -743,6 +745,12 @@ export default function App() {
       await pushRemoteState(mergedState);
       const syncedAt = Date.now();
       setLastSyncAt(syncedAt);
+      const stateHash = JSON.stringify({
+        sessions: mergedState.sessions.map(s => ({ id: s.id, updatedAt: s.updatedAt })),
+        memories: mergedState.memories.length,
+        settings: [mergedState.selectedModel, mergedState.userName, mergedState.geminiApiKey]
+      });
+      setLastPushedHash(stateHash);
       setSyncStatus('Successfully synced to database.');
     } catch (e: any) {
       setSyncStatus(e.message || 'Remote sync failed.');
@@ -876,27 +884,15 @@ export default function App() {
     setTokenUsageData([]);
   }, []);
 
+  // Local Save Effect (Fast)
   useEffect(() => {
     if (!hasLoadedSharedState) return;
-
     const state = buildPersistedState();
     const timer = window.setTimeout(() => {
       savePersistedState(state).catch((error) => {
-        console.warn('Unable to save shared state; browser fallback is still updated.', error);
+        console.warn('Local save failed', error);
       });
-      if (state.currentUser && authToken && syncSettings.enabled) {
-        pushRemoteState(state)
-          .then(() => {
-            setLastSyncAt(Date.now());
-            setSyncStatus('Successfully synced to database.');
-          })
-          .catch((error) => {
-            console.warn('Remote sync failed.', error);
-            setSyncStatus(error.message || 'Remote sync failed.');
-          });
-      }
-    }, 350);
-
+    }, 400);
     return () => window.clearTimeout(timer);
   }, [
     hasLoadedSharedState,
@@ -914,6 +910,49 @@ export default function App() {
     sessions,
     currentSessionId,
     memories,
+    tokenUsageData,
+    customCounters
+  ]);
+
+  // Remote Sync Effect (Slow & Optimized)
+  useEffect(() => {
+    if (!hasLoadedSharedState || !currentUser || !authToken || !syncSettings.enabled) return;
+
+    const state = buildPersistedState();
+    const stateHash = JSON.stringify({
+      sessions: state.sessions.map(s => ({ id: s.id, updatedAt: s.updatedAt })),
+      memories: state.memories.length,
+      settings: [state.selectedModel, state.userName, state.geminiApiKey]
+    });
+
+    if (stateHash === lastPushedHash) return;
+
+    const timer = window.setTimeout(() => {
+      setSyncStatus('Syncing to remote...');
+      pushRemoteState(state)
+        .then(() => {
+          setLastSyncAt(Date.now());
+          setLastPushedHash(stateHash);
+          setSyncStatus('Successfully synced to database.');
+        })
+        .catch((error) => {
+          console.warn('Remote sync failed.', error);
+          setSyncStatus(error.message || 'Remote sync failed.');
+        });
+    }, 15000);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    hasLoadedSharedState,
+    currentUser,
+    authToken,
+    syncSettings.enabled,
+    sessions,
+    memories,
+    selectedModel,
+    userName,
+    geminiApiKey,
+    lastPushedHash
   ]);
 
   const fetchModels = useCallback(async () => {
