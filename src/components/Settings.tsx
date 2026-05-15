@@ -992,9 +992,15 @@ export function Settings({
                 >
                   Endpoint
                 </button>
+                <button
+                  onClick={() => setGenSettings({ ...genSettings, webSearchEngine: 'tavily', webSearchProvider: 'gemini' })}
+                  className={`py-3 px-4 rounded-2xl border text-xs font-bold transition-all ${genSettings.webSearchEngine === 'tavily' ? 'bg-primary/10 border-primary text-primary shadow-sm ring-1 ring-primary/20' : 'bg-surface border-outline text-on-surface-variant hover:border-primary/50'}`}
+                >
+                  Tavily AI
+                </button>
               </div>
               <p className="text-[10px] text-on-surface-variant italic leading-relaxed">
-                Gemini Grounding uses Gemini's built-in Google Search. Google Custom uses your Programmable Search API key and search engine ID. DuckDuckGo uses the public instant answer API. Endpoint only works when your provider/model has live web access.
+                Gemini Grounding uses Gemini's built-in Google Search. Google Custom uses your Programmable Search API. DuckDuckGo uses the public instant answer API. Tavily AI provides high-quality search results for LLMs. Endpoint only works when your provider/model has live web access.
               </p>
             </div>
 
@@ -1049,6 +1055,20 @@ export function Settings({
                   placeholder="Search engine ID (cx)"
                   className="w-full bg-surface border border-outline rounded-2xl p-4 text-xs font-body text-on-surface focus:outline-none focus:border-primary transition-colors"
                 />
+              </div>
+            ) : genSettings.webSearchEngine === 'tavily' ? (
+              <div className="space-y-4">
+                <label className="block text-[10px] uppercase tracking-widest text-on-surface-variant font-semibold mb-2">Tavily Search API</label>
+                <div className="relative">
+                  <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+                  <input
+                    type="password"
+                    value={genSettings.tavilyApiKey || ''}
+                    onChange={(e) => setGenSettings({ ...genSettings, tavilyApiKey: e.target.value })}
+                    placeholder="Tavily API key (tvly-...)"
+                    className="w-full bg-surface border border-outline rounded-2xl py-3 pl-9 pr-3 text-sm font-body text-on-surface focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                  />
+                </div>
               </div>
             ) : genSettings.webSearchEngine === 'duckduckgo' ? (
               <div className="space-y-4">

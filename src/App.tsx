@@ -50,12 +50,13 @@ export interface GenerationSettings {
   imageModel: 'gemini' | 'openai';
   videoModel: 'veo';
   webSearchMode: 'off' | 'auto' | 'on';
-  webSearchEngine: 'gemini' | 'endpoint' | 'google-custom' | 'duckduckgo';
+  webSearchEngine: 'gemini' | 'endpoint' | 'google-custom' | 'duckduckgo' | 'tavily';
   webSearchProvider: 'gemini' | 'endpoint';
   webSearchModel: string;
   webSearchEndpointId: string;
   googleSearchApiKey: string;
   googleSearchCx: string;
+  tavilyApiKey: string;
 }
 
 export interface CustomPersonality {
@@ -176,6 +177,7 @@ const DEFAULT_GEN_SETTINGS: GenerationSettings = {
   webSearchEndpointId: '',
   googleSearchApiKey: '',
   googleSearchCx: '',
+  tavilyApiKey: '',
 };
 
 const DEFAULT_VOICE_SETTINGS: VoiceSettings = {

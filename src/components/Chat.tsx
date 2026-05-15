@@ -52,6 +52,7 @@ import {
 } from "@capacitor/filesystem";
 import JSZip from "jszip";
 import { encoding_for_model, get_encoding } from 'tiktoken';
+import { tavily } from "@tavily/core";
 
 interface ChatProps {
   selectedModel?: string;
@@ -2066,6 +2067,46 @@ Web search is NOT needed for:
         onInlineStatus?.('Endpoint search complete. Reading sources...');
         setTimeout(() => setSearchStatus(null), 3000);
         return `\n\n[Web Search Results]\n${searchText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
+      }
+      if (searchEngine === 'tavily') {
+        const apiKey = genSettings.tavilyApiKey?.trim();
+        if (!apiKey) {
+          throw new Error('Tavily API key is not configured.');
+        }
+
+        onInlineStatus?.('Searching the web with Tavily AI...');
+        setSearchStatus('Tavily searching...');
+
+        try {
+          const client = tavily({ apiKey });
+          const response = await client.search(query, {
+            searchDepth: "advanced",
+            includeAnswer: true,
+            maxResults: 8
+          });
+
+          const results = Array.isArray(response.results) ? response.results : [];
+          if (results.length === 0) throw new Error('Tavily returned no results.');
+
+          const resultsText = results
+            .map((result: any, index: number) => {
+              const title = result.title || 'Untitled';
+              const link = result.url || '';
+              const snippet = result.content || '';
+              return `[${index + 1}] ${title}\n${link}\n${snippet}`;
+            })
+            .join('\n\n');
+
+          const answerText = (response as any).answer ? `\n\nTavily AI Summary: ${(response as any).answer}\n` : '';
+
+          setSearchStatus(`Found ${results.length} Tavily results`);
+          onInlineStatus?.(`Found ${results.length} Tavily results. Analyzing...`);
+          setTimeout(() => setSearchStatus(null), 3000);
+          return `\n\n[Web Search Results]${answerText}\n${resultsText}\n[End of Search Results]\n\nUsing the search results above as context, please answer the user's question. Cite source links when available:\n`;
+        } catch (err: any) {
+          console.error('Tavily search error:', err);
+          throw new Error(err.message || 'Tavily search failed.');
+        }
       }
 
       const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
