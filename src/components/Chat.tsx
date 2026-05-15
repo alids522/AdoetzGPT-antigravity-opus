@@ -10,7 +10,7 @@ import {
   Check,
   Square,
   BrainCircuit,
-  Image,
+  ImageIcon,
   Camera,
   FileText,
   Terminal,
@@ -3509,7 +3509,7 @@ Title:`;
                   className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl hover:bg-surface-dim transition-all group"
                 >
                   <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
-                    <Image size={20} />
+                    <ImageIcon size={20} />
                   </div>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
                     Gallery
