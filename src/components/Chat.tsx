@@ -52,7 +52,6 @@ import {
 } from "@capacitor/filesystem";
 import JSZip from "jszip";
 import { encoding_for_model, get_encoding } from 'tiktoken';
-import { tavily } from "@tavily/core";
 
 interface ChatProps {
   selectedModel?: string;
@@ -2078,14 +2077,21 @@ Web search is NOT needed for:
         setSearchStatus('Tavily searching...');
 
         try {
-          const client = tavily({ apiKey });
-          const response = await client.search(query, {
-            searchDepth: "advanced",
-            includeAnswer: true,
-            maxResults: 8
+          const data = await fetchJsonWithProxyFallback('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              api_key: apiKey,
+              query: query,
+              search_depth: 'advanced',
+              include_answer: true,
+              max_results: 8,
+            }),
           });
 
-          const results = Array.isArray(response.results) ? response.results : [];
+          const results = Array.isArray(data.results) ? data.results : [];
           if (results.length === 0) throw new Error('Tavily returned no results.');
 
           const resultsText = results
@@ -2097,7 +2103,7 @@ Web search is NOT needed for:
             })
             .join('\n\n');
 
-          const answerText = (response as any).answer ? `\n\nTavily AI Summary: ${(response as any).answer}\n` : '';
+          const answerText = data.answer ? `\n\nTavily AI Summary: ${data.answer}\n` : '';
 
           setSearchStatus(`Found ${results.length} Tavily results`);
           onInlineStatus?.(`Found ${results.length} Tavily results. Analyzing...`);
