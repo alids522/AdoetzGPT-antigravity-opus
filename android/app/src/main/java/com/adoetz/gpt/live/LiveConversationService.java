@@ -78,73 +78,14 @@ public class LiveConversationService extends Service {
         wakeLock.setReferenceCounted(false);
         wakeLock.acquire();
 
-        executor.execute(() -> {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                ACTIVE.set(false);
-                releaseWakeLock();
-                return;
-            }
-
-            int sampleRate = 24000;
-            int minBufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            if (minBufferSize <= 0) {
-                ACTIVE.set(false);
-                releaseWakeLock();
-                return;
-            }
-
-            int bufferSize = Math.max(minBufferSize, sampleRate);
-
-            try {
-                audioRecord = new AudioRecord(
-                        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                        sampleRate,
-                        AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT,
-                        bufferSize
-                );
-
-                if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                    ACTIVE.set(false);
-                    releaseAudioRecord();
-                    releaseWakeLock();
-                    return;
-                }
-
-                short[] buffer = new short[bufferSize / 2];
-                audioRecord.startRecording();
-
-                while (ACTIVE.get() && !Thread.currentThread().isInterrupted()) {
-                    int read = audioRecord.read(buffer, 0, buffer.length);
-                    if (read < 0) {
-                        ACTIVE.set(false);
-                        break;
-                    }
-                }
-            } catch (IllegalStateException | SecurityException e) {
-                ACTIVE.set(false);
-                releaseAudioRecord();
-                releaseWakeLock();
-            }
-        });
+        // We only need to hold the wake lock and run as a foreground service.
+        // We DO NOT initialize AudioRecord here because it would steal the microphone 
+        // from the WebView's navigator.mediaDevices.getUserMedia().
     }
 
     private void stopLiveConversation() {
         ACTIVE.set(false);
-
-        releaseAudioRecord();
         releaseWakeLock();
-    }
-
-    private synchronized void releaseAudioRecord() {
-        if (audioRecord != null) {
-            try {
-                audioRecord.stop();
-            } catch (IllegalStateException ignored) {
-            }
-            audioRecord.release();
-            audioRecord = null;
-        }
     }
 
     private void releaseWakeLock() {
